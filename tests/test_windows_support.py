@@ -160,6 +160,16 @@ try:
         os.environ.pop("ProgramFiles", None)
     else:
         os.environ["ProgramFiles"] = saved_pf
+    saved_appdata = os.environ.get("APPDATA")
+    os.environ["APPDATA"] = os.path.join(SCRATCH, "Roaming")
+    check("Aside's sign-in shortcut lives in the Startup folder",
+          ws.aside_shortcut_path() == os.path.join(
+              SCRATCH, "Roaming", "Microsoft", "Windows", "Start Menu",
+              "Programs", "Startup", "Aside.lnk"))
+    if saved_appdata is None:
+        os.environ.pop("APPDATA", None)
+    else:
+        os.environ["APPDATA"] = saved_appdata
     check("a Run entry for Aside.exe is recognised",
           ws._starts_aside(r'"C:\Program Files\Aside\Application\Aside.exe"')
           and not ws._starts_aside(r'"C:\Tools\aside-cli.exe"'))

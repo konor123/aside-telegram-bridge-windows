@@ -578,9 +578,24 @@ def set_autostart(name, enabled):
 # --- Aside at sign-in ----------------------------------------------------
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-APPROVED_KEY = (r"Software\Microsoft\Windows\CurrentVersion\Explorer"
-                r"\StartupApproved\Run")
+APPROVED_RUN_KEY = (r"Software\Microsoft\Windows\CurrentVersion\Explorer"
+                    r"\StartupApproved\Run")
+APPROVED_FOLDER_KEY = (r"Software\Microsoft\Windows\CurrentVersion"
+                       r"\Explorer\StartupApproved\StartupFolder")
 ASIDE_RUN_VALUE = "Aside"
+ASIDE_SHORTCUT = "Aside.lnk"
+SW_SHOWMINNOACTIVE = 7
+
+
+def startup_folder():
+    appdata = os.environ.get("APPDATA") or os.path.expanduser(
+        os.path.join("~", "AppData", "Roaming"))
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu",
+                        "Programs", "Startup")
+
+
+def aside_shortcut_path():
+    return os.path.join(startup_folder(), ASIDE_SHORTCUT)
 
 
 def aside_app_path():
@@ -617,55 +632,92 @@ def _starts_aside(command):
     return "\\aside\\application\\aside.exe" in (command or "").lower()
 
 
-def _startup_disabled(name):
+def _startup_disabled(approved_key, name):
     """True if the entry was switched off in Task Manager > Startup apps."""
     import winreg
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY) as key:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, approved_key) as key:
             data, _ = winreg.QueryValueEx(key, name)
     except OSError:
         return False
     return bool(data) and bool(data[0] & 1)
 
 
+def _clear_startup_disabled(approved_key, name):
+    """Undo a Task Manager switch-off, which outlives the entry itself."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, approved_key, 0,
+                            winreg.KEY_SET_VALUE) as key:
+            winreg.DeleteValue(key, name)
+    except OSError:
+        pass
+
+
 def aside_autostart_enabled():
-    """Whether Aside opens at sign-in (an enabled Run entry for Aside.exe)."""
+    """Whether Aside opens at sign-in: our startup shortcut, or any Run
+    entry for Aside.exe, that Task Manager has not switched off."""
     if not IS_WINDOWS:
         return False
-    return any(_starts_aside(cmd) and not _startup_disabled(name)
-               for name, cmd in _run_values().items())
+    if os.path.isfile(aside_shortcut_path()) and not _startup_disabled(
+            APPROVED_FOLDER_KEY, ASIDE_SHORTCUT):
+        return True
+    return any(_starts_aside(cmd) and not _startup_disabled(
+        APPROVED_RUN_KEY, name) for name, cmd in _run_values().items())
+
+
+def _remove_aside_run_entries():
+    import winreg
+    stale = [name for name, cmd in _run_values().items()
+             if name == ASIDE_RUN_VALUE or _starts_aside(cmd)]
+    if not stale:
+        return
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                        winreg.KEY_SET_VALUE) as key:
+        for name in stale:
+            winreg.DeleteValue(key, name)
 
 
 def set_aside_autostart(enabled):
     """Add or remove Aside from the programs Windows opens at sign-in.
 
-    Aside.exe is started with no arguments, the same way the Aside CLI
-    opens it when it finds Aside not running. Returns (ok, message).
+    Aside has no windowless mode -- `--no-startup-window` makes the browser
+    exit at once, and the daemon with it -- so it opens minimized instead:
+    a shortcut in the Startup folder with "Run: Minimized", which is how
+    Explorer starts it at sign-in. Aside.exe gets no arguments, as when the
+    Aside CLI opens it. Returns (ok, message).
     """
-    import winreg
-    if enabled:
-        app = aside_app_path()
-        if not app:
-            return False, "Aside.exe not found -- is Aside installed?"
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
-            winreg.SetValueEx(key, ASIDE_RUN_VALUE, 0, winreg.REG_SZ,
-                              quote_arg(app))
-        # An entry switched off in Task Manager stays off until this flag
-        # is cleared, whatever the Run value says.
+    shortcut = aside_shortcut_path()
+    if not enabled:
         try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY, 0,
-                                winreg.KEY_SET_VALUE) as key:
-                winreg.DeleteValue(key, ASIDE_RUN_VALUE)
-        except OSError:
+            os.remove(shortcut)
+        except FileNotFoundError:
             pass
-        return True, "opens at sign-in"
-    removed = [name for name, cmd in _run_values().items()
-               if name == ASIDE_RUN_VALUE or _starts_aside(cmd)]
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
-                        winreg.KEY_SET_VALUE) as key:
-        for name in removed:
-            winreg.DeleteValue(key, name)
-    return True, "does not open at sign-in"
+        _remove_aside_run_entries()
+        return True, "does not open at sign-in"
+    app = aside_app_path()
+    if not app:
+        return False, "Aside.exe not found -- is Aside installed?"
+    os.makedirs(os.path.dirname(shortcut), exist_ok=True)
+    script = (
+        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut("
+        "$env:ASIDE_LNK); $s.TargetPath = $env:ASIDE_EXE; "
+        "$s.WorkingDirectory = Split-Path -Parent $env:ASIDE_EXE; "
+        "$s.WindowStyle = %d; $s.Description = 'Aside (minimized)'; "
+        "$s.Save()" % SW_SHOWMINNOACTIVE)
+    env = dict(os.environ, ASIDE_LNK=shortcut, ASIDE_EXE=app)
+    try:
+        r = run_quiet(["powershell.exe", "-NoProfile", "-NonInteractive",
+                       "-Command", script], timeout=60, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, "could not create the startup shortcut: %s" % e
+    if r.returncode != 0 or not os.path.isfile(shortcut):
+        return False, "could not create the startup shortcut: %s" % (
+            (r.stderr or r.stdout).strip()[:200])
+    _clear_startup_disabled(APPROVED_FOLDER_KEY, ASIDE_SHORTCUT)
+    # An earlier version used a Run entry; two entries would open Aside twice.
+    _remove_aside_run_entries()
+    return True, "opens minimized at sign-in"
 
 
 def status(name):

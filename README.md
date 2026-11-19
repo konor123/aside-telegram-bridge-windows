@@ -210,7 +210,8 @@ to `service.out.log` / `service.err.log` next to `bridge.py`, and
 The wizard asks whether the bridge and Aside itself should start when you
 sign in to Windows. The bot can only answer while Aside is open, so the
 two go together: the bridge's and the Mini App's scheduled tasks get a
-sign-in trigger, and Aside is added to your startup apps. Change it any
+sign-in trigger, and Aside is added to your startup apps. Aside has no
+windowless mode, so it opens minimized to the taskbar. Change it any
 time:
 
 ```powershell

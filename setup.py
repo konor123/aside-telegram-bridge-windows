@@ -410,7 +410,7 @@ def install_service_windows():
         except OSError as e:
             aside_ok, aside_msg = False, str(e)
         if aside_ok:
-            ok("Aside opens at sign-in")
+            ok("Aside %s" % aside_msg)
         else:
             warn("couldn't add Aside to sign-in: %s" % aside_msg)
     else:
