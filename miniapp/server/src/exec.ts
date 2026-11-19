@@ -69,7 +69,11 @@ export interface RunnerOptions {
   defaultModel: string;
   defaultEffort: EffortLevel;
   modelAliases: Record<string, string>;
-  /** Run `aside repl` to grant full-access on freshly created sessions. */
+  /**
+   * Create sessions with `--permission full-access`. Off by default -- the
+   * mini app does not silently widen permissions; `MINIAPP_GRANT_FULL_ACCESS`
+   * opts in.
+   */
   grantFullAccess?: boolean;
   /**
    * Read a session's daemon status, for the suspend watchdog.
@@ -561,6 +565,10 @@ export class TurnRunner extends EventEmitter {
     const child = this.spawnFn(
       this.opts.asideCli,
       [
+        // Aside refuses to raise a session's permission after the fact
+        // ("Only the user can raise a task's permission"), so the opt-in
+        // has to ride on the create.
+        ...(this.opts.grantFullAccess ? ['--permission', 'full-access'] : []),
         'exec',
         ...modelArgs(request.model),
         '--effort',
@@ -665,49 +673,7 @@ export class TurnRunner extends EventEmitter {
     this.pendingChildren.delete(child);
     this.emit('turn_started', turn);
 
-    if (this.opts.grantFullAccess) this.grantFullAccess(discovered);
     return { sessionId: discovered };
-  }
-
-  /**
-   * New CLI sessions default to guard mode. Off by default here -- the
-   * mini app does not silently widen permissions; flip
-   * `miniapp_grant_full_access` in the bridge config to opt in.
-   */
-  private grantFullAccess(sessionId: string): void {
-    try {
-      const child = this.spawnFn(
-        this.opts.asideCli,
-        ['repl', grantFullAccessExpression(sessionId)],
-        { stdio: 'ignore', windowsHide: true },
-      );
-      /*
-       * Tracked, bounded and reaped.
-       *
-       * This was fire-and-forget: not in `pendingChildren`, so `shutdown`
-       * never killed it, with no timeout and no close handler. An `aside
-       * repl` that hung against an unresponsive daemon therefore lived
-       * forever, one per session created, holding its pipes open. Being
-       * best-effort is not a reason to leave a process untracked.
-       */
-      this.pendingChildren.add(child);
-      const hard = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          // already gone
-        }
-      }, 10_000);
-      hard.unref?.();
-      const done = () => {
-        clearTimeout(hard);
-        this.pendingChildren.delete(child);
-      };
-      child.on('error', done);
-      child.on('close', done);
-    } catch {
-      // best effort only
-    }
   }
 
   private listSessionDirs(): string[] {

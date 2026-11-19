@@ -22,9 +22,12 @@ The setup wizard walks you through the rest:
 1. It asks for a bot token -- message [@BotFather](https://t.me/botfather)
    in Telegram, send `/newbot`, copy the token it gives you.
 2. You text your new bot once -- the wizard detects you automatically.
-3. Pick a reply style. The chat bridge installs itself as a background
-   task that starts when you sign in to Windows, and your bot answers from
-   then on, even after reboots.
+3. Pick a reply style, and let Aside keep the sessions the bridge starts
+   (`aside settings save-sessions enable` -- otherwise Aside deletes a
+   CLI-started session 15 minutes after it goes quiet, and the bot forgets
+   the conversation). The chat bridge installs itself as a background task
+   that starts when you sign in to Windows, and your bot answers from then
+   on, even after reboots.
 4. It then offers the Mini App and defaults to yes. That step builds the
    web app, so it takes a few minutes on a first run; the chat bridge is
    already working while it does. It finishes by printing your public

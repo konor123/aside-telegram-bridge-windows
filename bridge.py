@@ -669,7 +669,8 @@ def spill_prompt(prompt):
             "as the message]%s" % (OWNER, path, QUESTION_REMINDER))
 
 
-def run_aside(prompt, session_id=None, model=None, effort=None):
+def run_aside(prompt, session_id=None, model=None, effort=None,
+              permission=None):
     log("EXEC start session=%s model=%s effort=%s"
         % (session_id or "-", model or "-", effort or "-"))
     t0 = time.time()
@@ -683,6 +684,8 @@ def run_aside(prompt, session_id=None, model=None, effort=None):
         cmd += ["-m", MODEL_IDS.get(model, model)]
     if effort:
         cmd += ["--effort", effort]
+    if permission:
+        cmd += ["--permission", permission]
     cmd += ["session", "resume", session_id] if session_id else ["exec"]
     cmd += ["--", prompt]
     if IS_WINDOWS and len(subprocess.list2cmdline(cmd)) > WINDOWS_CMDLINE_MAX:
@@ -1056,16 +1059,33 @@ def send_effort_picker():
         send_text("couldn't send the effort picker, check the log")
 
 
-def _grant_full_access(sid):
+def _run_repl(expression):
+    """`aside repl <expression>`. Returns (ok, detail)."""
     try:
-        subprocess.run(
-            [ASIDE_CLI, "repl",
-             "aside.sessions.update('%s', "
-             "{ permissionMode: 'full-access' })" % sid],
-            capture_output=True, timeout=30, **NO_WINDOW)
-        log("granted full-access to %s" % sid)
+        p = subprocess.run(
+            [ASIDE_CLI, "repl", expression], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30, **NO_WINDOW)
     except Exception as e:  # noqa: BLE001
-        log("full-access grant failed: %s" % e)
+        return False, str(e)
+    detail = ANSI_RE.sub("", (p.stderr or "") + (p.stdout or "")).strip()
+    return p.returncode == 0, detail[-300:]
+
+
+def _grant_full_access(sid):
+    """Best effort for a session switched to with /sessions.
+
+    Aside only raises a session's permission from its own UI now -- the
+    repl refuses with "Only the user can raise a task's permission" -- so
+    this only succeeds for a session that already allows it.
+    """
+    ok, detail = _run_repl(
+        "aside.sessions.update(%s, { permissionMode: 'full-access' })"
+        % json.dumps(sid))
+    if ok:
+        log("granted full-access to %s" % sid)
+    else:
+        log("full-access not granted on %s (raise it in the Aside app if "
+            "needed): %s" % (sid, detail))
 
 
 def switch_session(sid):
@@ -1243,10 +1263,12 @@ def handle_command(text):
 def new_session_settings_expression(sid):
     """The repl call that makes a fresh session safe to drive by text.
 
-    Two settings, one call so a two-field change cannot half-apply:
+    Full access is not part of it: the session is created with
+    `--permission full-access` (see heavy_new), because Aside refuses to
+    raise a session's permission from the repl ("Only the user can raise
+    a task's permission") -- and a refused call would have taken the
+    setting below down with it.
 
-    - permissionMode: new CLI sessions default to guard mode, and this
-      thread is the owner's own agent.
     - runtimeConfig.finalConfirm: forced OFF. It is inherited from the
       account default, and when it is on the daemon injects a
       SYSTEM-level instruction REQUIRING request_action_confirmation
@@ -1267,25 +1289,26 @@ def new_session_settings_expression(sid):
     rest of the row untouched.
     """
     return (
-        "aside.sessions.update(%s, { permissionMode: 'full-access', "
-        "runtimeConfig: { finalConfirm: false } })" % json.dumps(sid)
+        "aside.sessions.update(%s, { runtimeConfig: { finalConfirm: false } })"
+        % json.dumps(sid)
     )
 
 
 def _prepare_new_session(sid):
-    try:
-        subprocess.run(
-            [ASIDE_CLI, "repl", new_session_settings_expression(sid)],
-            capture_output=True, timeout=30, **NO_WINDOW)
-        log("granted full-access and cleared finalConfirm on %s" % sid)
-    except Exception as e:  # noqa: BLE001
-        log("new-session settings failed: %s" % e)
+    ok, detail = _run_repl(new_session_settings_expression(sid))
+    if ok:
+        log("cleared finalConfirm on %s" % sid)
+    else:
+        log("new-session settings failed on %s: %s" % (sid, detail))
 
 
 def heavy_new():
     send_text("spinning up a fresh session...")
+    # This thread is the owner's own agent, so it runs with full access.
+    # It has to be set here, at creation: Aside will not raise it later.
     code, out, err = run_aside(
-        PERSONA_PROMPT, model=state["model"], effort="low"
+        PERSONA_PROMPT, model=state["model"], effort="low",
+        permission="full-access",
     )
     if True:  # keep original structure below
         if code != 0:
@@ -2017,7 +2040,28 @@ def stream_new(msg_file, pos, turn):
     return pos + consumed, saw
 
 
-def handle_message(text):
+SESSION_MISSING_RE = re.compile(r"session not found", re.I)
+
+
+def recover_missing_session(text):
+    """The session is gone from Aside: start a fresh one and resend.
+
+    Aside deletes a session the CLI started 15 minutes after it goes idle
+    unless `aside settings save-sessions` is enabled, and a session can be
+    deleted from the app as well. Either way the message would otherwise
+    fail, and keep failing, until the owner thought of /new.
+    """
+    gone = state.get("session_id")
+    log("session %s is gone from Aside; starting a fresh one" % gone)
+    send_text("that session no longer exists in Aside -- starting a fresh "
+              "one and sending your message again")
+    heavy_new()
+    if state.get("session_id") and state.get("session_id") != gone:
+        WORKER_BUSY.set()
+        handle_message(text, recovered=True)
+
+
+def handle_message(text, recovered=False):
     msg_file = session_msg_file(state["session_id"])
     offset = 0
     if msg_file and os.path.exists(msg_file):
@@ -2101,6 +2145,9 @@ def handle_message(text):
     elif not sent_any:
         if out.strip():
             send_bubbles(out.strip())
+        elif code != 0 and not recovered and SESSION_MISSING_RE.search(
+                "%s\n%s" % (err, out)):
+            recover_missing_session(text)
         elif code != 0:
             send_text("hit an error running that: %s"
                       % (err or "unknown")[:300])

@@ -289,7 +289,10 @@ check("native confirm: still notified",
 # ---- 8. a fresh session is created with the native flag off --------
 print("\nnew-session settings")
 expr = b.new_session_settings_expression("SESS-1")
-check("new session: keeps full-access", "permissionMode: 'full-access'" in expr)
+# Aside refuses to raise permission from the repl, and a refused call
+# would drop finalConfirm with it; full access is set at creation instead.
+check("new session: does not try to raise permission from the repl",
+      "permissionMode" not in expr)
 check("new session: forces finalConfirm off", "finalConfirm: false" in expr)
 check("new session: never turns it on", "finalConfirm: true" not in expr)
 check("new session: id is a JSON literal, not interpolated quotes",

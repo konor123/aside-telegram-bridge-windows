@@ -345,6 +345,40 @@ def write_config(token, chat_id, name, style, cli):
            "it takes effect")
 
 
+def offer_saved_sessions(cli):
+    """Ask Aside to keep the sessions the bridge starts.
+
+    Aside deletes a session the CLI started 15 minutes after it goes idle
+    unless the account's `save-sessions` CLI setting is on. The bridge and
+    the Mini App both start sessions through the CLI, so without it the
+    bot loses the conversation after any quiet spell. The trade-off is that
+    every CLI session -- from any tool -- then shows in Aside's chat list.
+    """
+    say("")
+    say("  Aside deletes sessions started from its CLI -- which is how the")
+    say("  bridge starts them -- 15 minutes after they go quiet, so the bot")
+    say("  would keep forgetting the conversation. Keeping them also lists")
+    say("  them in Aside's chat list, like any other chat.")
+    if not ask("  Keep CLI sessions? (y/n)", "y").lower().startswith("y"):
+        warn("skipped -- the bot starts a fresh session when Aside has "
+             "deleted the old one")
+        return
+    kwargs = {"creationflags": 0x08000000} if IS_WINDOWS else {}
+    try:
+        r = subprocess.run([cli, "settings", "save-sessions", "enable"],
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=90, **kwargs)
+        failed = r.returncode != 0 and (r.stderr or r.stdout).strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        failed = str(e)
+    if failed:
+        warn("couldn't change it (%s)" % failed[:200])
+        say("    %sRun this once Aside is open: aside settings "
+            "save-sessions enable%s" % (DIM, RESET))
+    else:
+        ok("Aside keeps CLI sessions")
+
+
 def register_bot_commands(token):
     cmds = [
         {"command": "status", "description": "model, session, queue"},
@@ -657,6 +691,7 @@ def main():
     chat_id, detected_name = step_chat_id(token, bot)
     name, style = step_preferences(detected_name)
     write_config(token, chat_id, name, style, cli)
+    offer_saved_sessions(cli)
     register_bot_commands(token)
     started = install_service()
     offer_bridgemon()
