@@ -98,6 +98,21 @@ try:
             return False
     check("stderr reaches the log as UTF-8", wait_for(logged, 10))
 
+    print("\nautostart")
+    running_pid = ws.status(NAME)["pid"]
+    ok, msg = ws.set_autostart(NAME, False)
+    check("autostart switches off (%s)" % msg,
+          ok and ws.autostart_enabled(NAME) is False)
+    xml = ws.run_quiet(["schtasks.exe", "/Query", "/TN", NAME, "/XML"],
+                       encoding=None, errors="replace").stdout
+    trigger = xml.split("</LogonTrigger>")[0]
+    check("the sign-in trigger is disabled in Task Scheduler",
+          "<Enabled>false</Enabled>" in trigger)
+    check("switching it leaves the running service alone",
+          ws.status(NAME)["running"] and ws.status(NAME)["pid"] == running_pid)
+    ok, msg = ws.set_autostart(NAME, True)
+    check("and back on (%s)" % msg, ok and ws.autostart_enabled(NAME) is True)
+
     print("\ncrash")
     ws.terminate(first["pid"])
     check("the supervisor restarts a process that dies",

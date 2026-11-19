@@ -371,20 +371,51 @@ def bless_current_bridge():
         pass
 
 
+def ask_autostart_windows(ws):
+    """Whether the bridge (and Aside itself) should start at sign-in.
+
+    The bridge is only useful while Aside runs -- every turn goes through
+    it -- so the two are offered together.
+    """
+    previous = ws.autostart_enabled(ws.BRIDGE_SERVICE)
+    say("")
+    say("  Start the bridge and Aside automatically when you sign in to")
+    say("  Windows? Aside has to be open for the bot to answer.")
+    say("  %sFor a PC that must come back on its own after a reboot, also"
+        % DIM)
+    say("  turn on automatic sign-in in Windows.%s" % RESET)
+    default = "y" if previous is not False else "n"
+    return ask("  Start at sign-in? (y/n)", default).lower().startswith("y")
+
+
 def install_service_windows():
     ws = _winsupport()
     name = ws.BRIDGE_SERVICE
+    at_logon = ask_autostart_windows(ws)
     ws.stop(name)
     registered, message = ws.install(
         name, [ws.console_python(), BRIDGE_PY], BRIDGE_DIR,
         os.path.join(BRIDGE_DIR, "service.out.log"),
         os.path.join(BRIDGE_DIR, "service.err.log"),
-        description="Aside Telegram bridge (aside-telegram-bridge)")
+        description="Aside Telegram bridge (aside-telegram-bridge)",
+        at_logon=at_logon)
     if not registered:
         fail("couldn't register the scheduled task: %s" % message)
         say("  You can start it manually with: python bridge.py")
         return False
-    ok("service installed (starts at sign-in, restarts on crash)")
+    if at_logon:
+        ok("service installed (starts at sign-in, restarts on crash)")
+        try:
+            aside_ok, aside_msg = ws.set_aside_autostart(True)
+        except OSError as e:
+            aside_ok, aside_msg = False, str(e)
+        if aside_ok:
+            ok("Aside opens at sign-in")
+        else:
+            warn("couldn't add Aside to sign-in: %s" % aside_msg)
+    else:
+        ok("service installed (restarts on crash; start it with "
+           "`bridgemon watch --start`, or turn on `bridgemon autostart`)")
     bless_current_bridge()
     if ws.start(name):
         ok("bridge is running")

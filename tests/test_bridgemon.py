@@ -179,6 +179,11 @@ check("miniapp.log is first", logs[0].endswith("miniapp.log"))
 
 # ---- 7. installed detection --------------------------------------------
 print("\ninstalled detection")
+# Whether a service is registered is a fact about this machine, not about
+# the throwaway tree -- on a PC or Mac that has the real Mini App installed
+# it is always true. Pin it to "not registered" for the tree checks.
+real_service_installed = bm.service_installed
+bm.service_installed = lambda lbl: False
 write_config(None)
 check("a bare tree has no mini app", not bm.miniapp_installed())
 write_config({"port": 8790})
@@ -186,6 +191,11 @@ check("a config section counts as installed", bm.miniapp_installed())
 write_config(None)
 os.makedirs(bm.MINIAPP_DIR, exist_ok=True)
 check("a miniapp/ tree counts as installed", bm.miniapp_installed())
+bm.service_installed = lambda lbl: True
+shutil.rmtree(bm.MINIAPP_DIR)
+check("a registered service counts as installed", bm.miniapp_installed())
+os.makedirs(bm.MINIAPP_DIR, exist_ok=True)
+bm.service_installed = real_service_installed
 
 # ---- 8. dist snapshot + restore ----------------------------------------
 print("\ndist snapshot")

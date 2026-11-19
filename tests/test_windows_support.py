@@ -94,6 +94,76 @@ try:
           == r'"C:\a<b>\winsupport.py" run AsideTelegramBridge'
           and text("t:Actions/t:Exec/t:WorkingDirectory") == r"C:\a<b>")
 
+    off = ET.fromstring(ws.task_xml(
+        "AsideTelegramBridge", "pythonw.exe", "run", "C:\\x", r"PC\owner",
+        at_logon=False).encode("utf-16"))
+    check("autostart off disables the sign-in trigger only",
+          off.find("t:Triggers/t:LogonTrigger/t:Enabled", ns).text == "false"
+          and off.find("t:Settings/t:Enabled", ns).text == "true")
+    check("autostart is on by default",
+          text("t:Triggers/t:LogonTrigger/t:Enabled") == "true")
+
+    # ---- 1b. switching autostart re-registers from the spec ------------
+    print("\nautostart switch")
+    registered = []
+
+    class Ran:
+        returncode, stdout, stderr = 0, "", ""
+
+    def fake_schtasks(*args, timeout=60):
+        if args[0] == "/Create":
+            with open(args[args.index("/XML") + 1], encoding="utf-16") as f:
+                registered.append(f.read())
+        return Ran()
+
+    real_schtasks = ws._schtasks
+    ws._schtasks = fake_schtasks
+    try:
+        ok, _ = ws.install("AsideBridgeAutostartProbe", ["x.exe"], SCRATCH,
+                           "out.log", "err.log", description="probe")
+        check("a new service starts at sign-in",
+              ok and ws.autostart_enabled("AsideBridgeAutostartProbe") is True
+              and "<Enabled>true</Enabled>" in registered[-1].split(
+                  "</LogonTrigger>")[0])
+        ok, msg = ws.set_autostart("AsideBridgeAutostartProbe", False)
+        check("switching it off re-registers with the trigger disabled",
+              ok and ws.autostart_enabled("AsideBridgeAutostartProbe") is False
+              and "<Enabled>false</Enabled>" in registered[-1].split(
+                  "</LogonTrigger>")[0])
+        ws.install("AsideBridgeAutostartProbe", ["y.exe"], SCRATCH,
+                   "out.log", "err.log", description="probe")
+        check("re-installing keeps the choice",
+              ws.autostart_enabled("AsideBridgeAutostartProbe") is False
+              and ws.read_spec("AsideBridgeAutostartProbe")["argv"]
+              == ["y.exe"])
+        check("an unknown service has no autostart to switch",
+              ws.autostart_enabled("AsideBridgeNoSuchService") is None
+              and ws.set_autostart("AsideBridgeNoSuchService", True)[0]
+              is False)
+    finally:
+        ws._schtasks = real_schtasks
+
+    # ---- 1c. Aside itself --------------------------------------------
+    print("\nAside at sign-in")
+    local_app = os.path.join(SCRATCH, "LocalAside", "Aside", "Application",
+                             "Aside.exe")
+    os.makedirs(os.path.dirname(local_app))
+    open(local_app, "w").close()
+    saved_pf = os.environ.get("ProgramFiles")
+    os.environ["LOCALAPPDATA"] = os.path.join(SCRATCH, "LocalAside")
+    os.environ["ProgramFiles"] = os.path.join(SCRATCH, "NoSuchProgramFiles")
+    check("Aside.exe is found where the Aside CLI looks",
+          ws.aside_app_path() == local_app)
+    os.environ["LOCALAPPDATA"] = os.path.join(SCRATCH, "Empty")
+    check("no Aside.exe reads as not installed", ws.aside_app_path() is None)
+    if saved_pf is None:
+        os.environ.pop("ProgramFiles", None)
+    else:
+        os.environ["ProgramFiles"] = saved_pf
+    check("a Run entry for Aside.exe is recognised",
+          ws._starts_aside(r'"C:\Program Files\Aside\Application\Aside.exe"')
+          and not ws._starts_aside(r'"C:\Tools\aside-cli.exe"'))
+
     # ---- 2. interpreters -----------------------------------------------
     print("\ninterpreters")
     pydir = os.path.join(SCRATCH, "py")
@@ -278,6 +348,7 @@ try:
                                else "com.aside.miniapp"))
     mon = load("monitor_win", os.path.join(HERE, "monitor.py"))
     check("monitor.py imports on this platform", callable(mon.read_key))
+    check("`bridgemon autostart` is a command", "autostart" in bm.COMMANDS)
 
 finally:
     if SAVED is None:

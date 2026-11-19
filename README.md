@@ -193,16 +193,35 @@ both services:
   is rebuilt (`npm ci && npm run build`) and restarted too, with the
   same snapshot-and-roll-back rule.
 - `bridgemon miniapp start|stop|restart|logs` -- the Mini App on its own.
+- `bridgemon autostart status|on|off` -- what starts when you sign in to
+  Windows (see below).
 - `bridgemon logs` / `rollback` / `init` -- the rest.
 
 To stop everything: `bridgemon watch --kill` and `bridgemon miniapp stop`.
 
 Both services are ordinary entries in Task Scheduler (`AsideTelegramBridge`
-and `AsideMiniApp`), triggered when you sign in. Each one runs a small
-supervisor that restarts its process if it exits and stops the whole
-process tree with it. Output goes to `service.out.log` / `service.err.log`
-next to `bridge.py`, and `miniapp.out.log` / `miniapp.err.log` for the
-Mini App.
+and `AsideMiniApp`). Each one runs a small supervisor that restarts its
+process if it exits and stops the whole process tree with it. Output goes
+to `service.out.log` / `service.err.log` next to `bridge.py`, and
+`miniapp.out.log` / `miniapp.err.log` for the Mini App.
+
+### Starting with Windows
+
+The wizard asks whether the bridge and Aside itself should start when you
+sign in to Windows. The bot can only answer while Aside is open, so the
+two go together: the bridge's and the Mini App's scheduled tasks get a
+sign-in trigger, and Aside is added to your startup apps. Change it any
+time:
+
+```powershell
+bridgemon autostart status
+bridgemon autostart on            # bridge, Mini App and Aside
+bridgemon autostart off aside     # or name just bridge / miniapp / aside
+```
+
+Aside needs a signed-in desktop to run, so everything starts at sign-in
+rather than at power-on. For a PC that has to come back on its own after a
+reboot or power cut, also turn on automatic sign-in in Windows.
 
 ## Security, the short version
 

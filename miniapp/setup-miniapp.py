@@ -294,13 +294,17 @@ def install_service_windows(node, entry, config_path, section, out_log,
                             err_log):
     ws = _winsupport()
     ws.stop(LABEL)
+    # Starts at sign-in exactly when the bridge does: the wizard asked
+    # about that once, for both.
+    bridge_autostart = ws.autostart_enabled(ws.BRIDGE_SERVICE)
     registered, message = ws.install(
         LABEL, [node, entry], MINIAPP_DIR, out_log, err_log,
         env={
             "MINIAPP_CONFIG": config_path,
             "MINIAPP_PORT": str(section.get("port", DEFAULT_PORT)),
         },
-        description="Aside Telegram Mini App server (aside-telegram-bridge)")
+        description="Aside Telegram Mini App server (aside-telegram-bridge)",
+        at_logon=bridge_autostart is not False)
     if not registered:
         fail("could not register the scheduled task: %s" % message)
         sys.exit(1)

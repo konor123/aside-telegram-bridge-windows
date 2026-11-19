@@ -411,10 +411,15 @@ def quote_arg(arg):
     return subprocess.list2cmdline([arg])
 
 
-def task_xml(name, command, arguments, workdir, user, description=""):
+def task_xml(name, command, arguments, workdir, user, description="",
+             at_logon=True):
     """Task definition: per-user logon trigger, no time limit, no battery
     rules, one instance, normal priority (the default of 7 is below
-    normal, and children would inherit it)."""
+    normal, and children would inherit it).
+
+    With `at_logon` off the trigger is kept but disabled: the task still
+    starts on demand (bridgemon, setup), just not at sign-in.
+    """
     e = _xml_escape
     return """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -424,7 +429,7 @@ def task_xml(name, command, arguments, workdir, user, description=""):
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
-      <Enabled>true</Enabled>
+      <Enabled>{logon}</Enabled>
       <UserId>{user}</UserId>
     </LogonTrigger>
   </Triggers>
@@ -467,7 +472,8 @@ def task_xml(name, command, arguments, workdir, user, description=""):
   </Actions>
 </Task>
 """.format(desc=e(description or name), name=e(name), user=e(user),
-           command=e(command), arguments=e(arguments), workdir=e(workdir))
+           command=e(command), arguments=e(arguments), workdir=e(workdir),
+           logon="true" if at_logon else "false")
 
 
 def _schtasks(*args, timeout=60):
@@ -490,12 +496,16 @@ def installed(name):
 
 
 def install(name, argv, cwd, stdout_log, stderr_log, env=None,
-            throttle=DEFAULT_THROTTLE_S, description="", python=None):
+            throttle=DEFAULT_THROTTLE_S, description="", python=None,
+            at_logon=None):
     """Register (or re-register) a service. Returns (ok, message).
 
     The spec is written first and the task only points at it, so changing
-    what a service runs never needs the task recreated.
+    what a service runs never needs the task recreated. `at_logon=None`
+    keeps whatever the existing registration chose (on for a new one).
     """
+    if at_logon is None:
+        at_logon = read_spec(name).get("at_logon", True)
     spec = {
         "name": name,
         "argv": [str(a) for a in argv],
@@ -504,13 +514,25 @@ def install(name, argv, cwd, stdout_log, stderr_log, env=None,
         "stderr": stderr_log,
         "env": {str(k): str(v) for k, v in (env or {}).items()},
         "throttle": throttle,
+        "description": description,
+        "at_logon": bool(at_logon),
+        "task_command": pythonw_for(python),
     }
     write_json_atomic(spec_path(name), spec)
+    return _register_task(name, spec)
+
+
+def _register_task(name, spec):
+    """(Re)create the scheduled task for a spec. Returns (ok, message).
+
+    Replacing the definition leaves a running instance running.
+    """
     script = os.path.join(HERE, "winsupport.py")
-    command = pythonw_for(python)
+    command = spec.get("task_command") or pythonw_for()
     arguments = "%s run %s" % (quote_arg(script), quote_arg(name))
     xml = task_xml(name, command, arguments, HERE, current_user(),
-                   description)
+                   spec.get("description") or "",
+                   spec.get("at_logon", True))
     fd, xml_path = tempfile.mkstemp(prefix="aside-task-", suffix=".xml")
     os.close(fd)
     try:
@@ -526,6 +548,124 @@ def install(name, argv, cwd, stdout_log, stderr_log, env=None,
         return False, _schtasks_message(r) or "schtasks exited %d" % (
             r.returncode)
     return True, "registered"
+
+
+def autostart_enabled(name):
+    """Whether a service starts at sign-in; None if it is not installed."""
+    spec = read_spec(name)
+    if not spec:
+        return None
+    return bool(spec.get("at_logon", True))
+
+
+def set_autostart(name, enabled):
+    """Turn a service's start-at-sign-in on or off. Returns (ok, message).
+
+    Re-registers the task from its saved spec; whether the service is
+    running right now is not affected.
+    """
+    spec = read_spec(name)
+    if not spec:
+        return False, "not installed"
+    spec["at_logon"] = bool(enabled)
+    spec.setdefault("task_command", pythonw_for())
+    write_json_atomic(spec_path(name), spec)
+    ok, msg = _register_task(name, spec)
+    return ok, ("starts at sign-in" if enabled else "manual start only") \
+        if ok else msg
+
+
+# --- Aside at sign-in ----------------------------------------------------
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+APPROVED_KEY = (r"Software\Microsoft\Windows\CurrentVersion\Explorer"
+                r"\StartupApproved\Run")
+ASIDE_RUN_VALUE = "Aside"
+
+
+def aside_app_path():
+    """Aside.exe, where the Aside CLI itself looks for it, or None."""
+    for base in (os.environ.get("LOCALAPPDATA"),
+                 os.environ.get("ProgramFiles")):
+        if base:
+            candidate = os.path.join(base, "Aside", "Application", "Aside.exe")
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+def _run_values():
+    """{name: command} under HKCU\\...\\Run."""
+    import winreg
+    out = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            i = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                out[name] = str(value)
+                i += 1
+    except OSError:
+        pass
+    return out
+
+
+def _starts_aside(command):
+    return "\\aside\\application\\aside.exe" in (command or "").lower()
+
+
+def _startup_disabled(name):
+    """True if the entry was switched off in Task Manager > Startup apps."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY) as key:
+            data, _ = winreg.QueryValueEx(key, name)
+    except OSError:
+        return False
+    return bool(data) and bool(data[0] & 1)
+
+
+def aside_autostart_enabled():
+    """Whether Aside opens at sign-in (an enabled Run entry for Aside.exe)."""
+    if not IS_WINDOWS:
+        return False
+    return any(_starts_aside(cmd) and not _startup_disabled(name)
+               for name, cmd in _run_values().items())
+
+
+def set_aside_autostart(enabled):
+    """Add or remove Aside from the programs Windows opens at sign-in.
+
+    Aside.exe is started with no arguments, the same way the Aside CLI
+    opens it when it finds Aside not running. Returns (ok, message).
+    """
+    import winreg
+    if enabled:
+        app = aside_app_path()
+        if not app:
+            return False, "Aside.exe not found -- is Aside installed?"
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            winreg.SetValueEx(key, ASIDE_RUN_VALUE, 0, winreg.REG_SZ,
+                              quote_arg(app))
+        # An entry switched off in Task Manager stays off until this flag
+        # is cleared, whatever the Run value says.
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, APPROVED_KEY, 0,
+                                winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, ASIDE_RUN_VALUE)
+        except OSError:
+            pass
+        return True, "opens at sign-in"
+    removed = [name for name, cmd in _run_values().items()
+               if name == ASIDE_RUN_VALUE or _starts_aside(cmd)]
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
+                        winreg.KEY_SET_VALUE) as key:
+        for name in removed:
+            winreg.DeleteValue(key, name)
+    return True, "does not open at sign-in"
 
 
 def status(name):

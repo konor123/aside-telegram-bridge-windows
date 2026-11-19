@@ -19,6 +19,12 @@ Mini App (the Telegram Mini App UI, if installed):
   bridgemon miniapp start | stop | restart
   bridgemon miniapp logs [n]
 
+Start at Windows sign-in (Windows only):
+  bridgemon autostart status
+  bridgemon autostart on|off [bridge|miniapp|aside ...]
+                            default: all three. `aside` is the Aside
+                             browser itself; the bridge needs it running.
+
 Live monitor (delegates to monitor.py, same as before):
   bridgemon watch           merged live timeline + interactive kill switch
   bridgemon watch --status  snapshot and exit
@@ -886,6 +892,61 @@ def cmd_watch(args):
     os.execvp(sys.executable, [sys.executable, monitor_py, *args])
 
 
+AUTOSTART_TARGETS = ("bridge", "miniapp", "aside")
+
+
+def _autostart_word(state):
+    return {True: "on", False: "off", None: "not installed"}[state]
+
+
+def cmd_autostart(args):
+    """What starts when you sign in to Windows, and switching it."""
+    if not IS_WINDOWS:
+        print("autostart is a Windows option; on macOS the launchd "
+              "services already start at login")
+        return 1
+    ws = _ws()
+    services = {"bridge": label(), "miniapp": MINIAPP_LABEL}
+    sub = args[0] if args else "status"
+    if sub == "status":
+        for target in ("bridge", "miniapp"):
+            print("%-8s %s" % (target + ":", _autostart_word(
+                ws.autostart_enabled(services[target]))))
+        app = ws.aside_app_path()
+        print("%-8s %s%s" % ("aside:", _autostart_word(
+            ws.aside_autostart_enabled()),
+            "" if app else " (Aside.exe not found)"))
+        print("These start when you sign in to Windows. For a PC that has "
+              "to come back on its own after a reboot, turn on automatic "
+              "sign-in in Windows as well.")
+        return 0
+    if sub not in ("on", "off"):
+        print("try: bridgemon autostart status | on | off "
+              "[bridge|miniapp|aside]")
+        return 1
+    targets = args[1:] or list(AUTOSTART_TARGETS)
+    unknown = [t for t in targets if t not in AUTOSTART_TARGETS]
+    if unknown:
+        print("unknown target: %s (use bridge, miniapp or aside)"
+              % ", ".join(unknown))
+        return 1
+    enabled = sub == "on"
+    rc = 0
+    for target in targets:
+        if target == "aside":
+            ok, msg = ws.set_aside_autostart(enabled)
+        elif ws.autostart_enabled(services[target]) is None:
+            # The Mini App is optional: skipping it is only a failure when
+            # it was asked for by name.
+            ok, msg = target == "miniapp" and not args[1:], "not installed"
+        else:
+            ok, msg = ws.set_autostart(services[target], enabled)
+        print("%-8s %s" % (target + ":", msg))
+        if not ok:
+            rc = 1
+    return rc
+
+
 COMMANDS = {
     "status": cmd_status,
     "update": cmd_update,
@@ -894,6 +955,7 @@ COMMANDS = {
     "init": cmd_init,
     "watch": cmd_watch,
     "miniapp": cmd_miniapp,
+    "autostart": cmd_autostart,
     "help": cmd_help,
     "--help": cmd_help,
     "-h": cmd_help,
