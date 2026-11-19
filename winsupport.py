@@ -148,13 +148,13 @@ def find_aside_cli():
 
 
 def console_python(python=None):
-    """python.exe for a service child: it gets a hidden console of its own,
-    which the console programs it starts then share instead of each
-    opening a window."""
+    """The console interpreter for a service child: it gets a hidden
+    console of its own, which the console programs it starts then share
+    instead of each opening a window. pythonw3.13t.exe -> python3.13t.exe."""
     python = python or sys.executable
     folder, exe = os.path.split(python)
-    if exe.lower() == "pythonw.exe":
-        candidate = os.path.join(folder, "python.exe")
+    if exe.lower().startswith("pythonw"):
+        candidate = os.path.join(folder, "python" + exe[len("pythonw"):])
         if os.path.exists(candidate):
             return candidate
     return python
@@ -354,14 +354,37 @@ def read_state(name):
 
 
 def pythonw_for(python=None):
-    """The windowless interpreter next to `python`, or `python` itself."""
+    """The windowless interpreter next to `python`, or `python` itself.
+
+    Covers every build's naming, not just python.exe: the py launcher can
+    hand back python3.13t.exe (free-threaded), whose windowless twin is
+    pythonw3.13t.exe.
+    """
     python = python or sys.executable
     folder, exe = os.path.split(python)
-    if exe.lower() == "python.exe":
-        candidate = os.path.join(folder, "pythonw.exe")
+    low = exe.lower()
+    if low.startswith("python") and not low.startswith("pythonw"):
+        candidate = os.path.join(folder, "pythonw" + exe[len("python"):])
         if os.path.exists(candidate):
             return candidate
     return python
+
+
+def _drop_console():
+    """Detach the supervisor from any console it was started with.
+
+    It should run under pythonw and have none, but if the task ended up
+    pointing at a console interpreter, Task Scheduler gives it a visible
+    window -- and closing that window kills the supervisor and, through
+    the job object, the service with it.
+    """
+    try:
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if k32.GetConsoleWindow():
+            k32.FreeConsole()
+    except (OSError, AttributeError):
+        pass
 
 
 def current_user():
@@ -769,6 +792,8 @@ def run(name):
     if not spec.get("argv"):
         sys.stderr.write("no service spec at %s\n" % spec_path(name))
         return 2
+    if IS_WINDOWS:
+        _drop_console()
     mutex = _single_instance(name)
     if mutex is None:
         return 0

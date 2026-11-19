@@ -109,6 +109,15 @@ try:
     os.remove(pyw)
     check("no pythonw means python, not a missing file",
           ws.pythonw_for(py) == py)
+    # The py launcher can pick a free-threaded build.
+    pyt = os.path.join(pydir, "python3.13t.exe")
+    pywt = os.path.join(pydir, "pythonw3.13t.exe")
+    for p in (pyt, pywt):
+        open(p, "w").close()
+    check("a free-threaded python maps to its own pythonw",
+          ws.pythonw_for(pyt) == pywt)
+    check("and back again for the service child",
+          ws.console_python(pywt) == pyt)
 
     # ---- 3. aside CLI discovery ----------------------------------------
     print("\naside CLI discovery")
@@ -142,7 +151,12 @@ try:
     print("\nstale exec matching")
     cli = r'"C:\Users\me\AppData\Local\Aside\CLI\current\aside.exe"'
     m = b.exec_cmdline_matches
-    check("a turn on the session matches",
+    check("a resumed turn on the session matches",
+          m(cli + ' --effort medium session resume abc123 -- "hi there"',
+            "abc123"))
+    check("a resumed turn for another session does not",
+          not m(cli + ' session resume abc1234 -- "x"', "abc123"))
+    check("an older CLI's exec --session turn matches too",
           m(cli + ' exec --session abc123 -m claude-code/x "hi there"',
             "abc123"))
     check("a quoted session id matches",
@@ -187,9 +201,16 @@ try:
                   f.read() == long_prompt)
         check("the question reminder still rides on the short prompt",
               b.QUESTION_REMINDER in last)
-        b.run_aside("short and sweet", session_id="abc123")
+        b.run_aside("short and sweet", session_id="abc123", effort="low")
         check("an ordinary prompt is passed through untouched",
               sent[-1][-1] == "short and sweet")
+        check("a follow-up resumes the session, options first",
+              sent[-1][1:] == ["--effort", "low", "session", "resume",
+                               "abc123", "--", "short and sweet"])
+        b.run_aside("-starts with a dash", effort="low")
+        check("a new session is an exec, and the prompt follows --",
+              sent[-1][1:] == ["--effort", "low", "exec", "--",
+                               "-starts with a dash"])
     finally:
         b.subprocess.run, b.MEDIA_DIR = real_run, real_media
         b.IS_WINDOWS = saved_flag

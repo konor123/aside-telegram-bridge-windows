@@ -15,8 +15,9 @@ uses.
 
 **The server** (`miniapp/server/`, Fastify + `ws`) does four things:
 
-- **Drives turns.** A message becomes `aside exec --session <id> -m
-  <provider/model> --effort <level> "<text>"`, spawned as a child process.
+- **Drives turns.** A message becomes `aside -m <provider/model> --effort
+  <level> session resume <id> -- "<text>"` (a new chat is `aside exec`),
+  spawned as a child process.
   One turn per session at a time; adjacent queued messages that share a
   model and effort are batched into one turn. The server owns that child,
   which is what makes Stop possible — and what makes the suspend watchdog

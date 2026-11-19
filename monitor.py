@@ -141,8 +141,8 @@ def exec_pids():
     try:
         if IS_WINDOWS:
             return [pid for pid, cmdline in _ws().find_processes(_cli_image())
-                    if re.search(r"(^|\s)exec(\s|$)", cmdline)]
-        out = subprocess.run(["pgrep", "-f", "MacOS/aside exec"],
+                    if re.search(r"(^|\s)(exec|resume)(\s|$)", cmdline)]
+        out = subprocess.run(["pgrep", "-f", "MacOS/aside .*(exec|resume)"],
                              capture_output=True, text=True).stdout
         return [int(p) for p in out.split()]
     except Exception:  # noqa: BLE001

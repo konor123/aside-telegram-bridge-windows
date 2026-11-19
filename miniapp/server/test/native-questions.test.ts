@@ -319,8 +319,9 @@ const ARG_SEP = '@@ARG@@';
  *  - records every argument verbatim, separator-delimited, so the exact
  *    prompt can be asserted. Splitting on newlines would hide the
  *    reminder, which sits on its own line;
- *  - creates a session directory for an `exec` with no `--session`, which
- *    is what `createSession` discovers a new id from;
+ *  - creates a session directory for an `exec` (a new session, as
+ *    opposed to a `session resume`), which is what `createSession`
+ *    discovers a new id from;
  *  - answers `repl` with the facade's own sentinel, so a permission write
  *    resolves instead of failing the request.
  */
@@ -335,11 +336,9 @@ async function bootRecorder(rows = defaultFixtureRows()) {
       `for a in "$@"; do printf '%s${ARG_SEP}' "$a"; done >> ${JSON.stringify(argvLog)}`,
       'case "$1" in',
       "  repl) echo '<<<ASIDE_JSONnullASIDE_JSON>>>' ;;",
-      '  exec)',
-      '    case "$*" in',
-      '      *--session*) ;;',
-      `      *) mkdir -p ${JSON.stringify(env.sessionsDir)}"/2026-09-09_made$$" ;;`,
-      '    esac ;;',
+      // Only a NEW session runs `exec` now; a follow-up starts with its
+      // root options and `session resume`, so it never reaches this arm.
+      `  exec) mkdir -p ${JSON.stringify(env.sessionsDir)}"/2026-09-09_made$$" ;;`,
       'esac',
       '',
     ].join('\n'),

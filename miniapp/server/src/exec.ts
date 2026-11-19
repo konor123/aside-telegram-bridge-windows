@@ -134,7 +134,7 @@ export const FALLBACK_EXEC_TIMEOUT_MS = 20 * 60 * 1000;
  * dash-leading as a flag no matter where it appears. So a perfectly
  * ordinary message that happens to start with `-` never reaches the agent:
  *
- *   $ aside exec --session X "- Color test: Red"
+ *   $ aside session resume X "- Color test: Red"
  *   error: unknown option '- Color test: Red'
  *
  * Caught in live E2E, where tapping an option on a question card sent
@@ -143,7 +143,7 @@ export const FALLBACK_EXEC_TIMEOUT_MS = 20 * 60 * 1000;
  * same way.
  *
  * `--` is the standard terminator and the CLI honours it: verified against
- * the real binary, where `aside exec --session X -- "-leading text"` gets
+ * the real binary, where `aside session resume X -- "-leading text"` gets
  * as far as "Session not found" rather than failing to parse. Passing it
  * unconditionally is correct: everything after `--` is positional, which
  * is what the prompt always was.
@@ -293,13 +293,17 @@ export class TurnRunner extends EventEmitter {
     queue.running = turn;
     this.emit('turn_started', turn);
 
+    // Aside CLI 1.26.916 and later dropped `aside exec --session` (it now
+    // fails with `Unknown option '--session'`); a follow-up is
+    // `aside session resume <id>`. That subcommand takes no -m/--effort of
+    // its own, so they go BEFORE it as root options.
     const args = [
-      'exec',
-      '--session',
-      sessionId,
       ...modelArgs(head.model),
       '--effort',
       head.effort,
+      'session',
+      'resume',
+      sessionId,
       // See `PROMPT_TERMINATOR`. Without this a message beginning with a
       // dash is parsed as a flag and the turn dies with `unknown option`.
       PROMPT_TERMINATOR,

@@ -673,14 +673,18 @@ def run_aside(prompt, session_id=None, model=None, effort=None):
     log("EXEC start session=%s model=%s effort=%s"
         % (session_id or "-", model or "-", effort or "-"))
     t0 = time.time()
-    cmd = [ASIDE_CLI, "exec"]
-    if session_id:
-        cmd += ["--session", session_id]
+    # Aside CLI 1.26.916 and later dropped `aside exec --session` (it fails
+    # with `Unknown option '--session'`); a follow-up is
+    # `aside session resume <id>`, which takes no -m/--effort of its own,
+    # so they go BEFORE the subcommand as root options. `--` ends option
+    # parsing, so a message that starts with a dash is still a prompt.
+    cmd = [ASIDE_CLI]
     if model:
         cmd += ["-m", MODEL_IDS.get(model, model)]
     if effort:
         cmd += ["--effort", effort]
-    cmd.append(prompt)
+    cmd += ["session", "resume", session_id] if session_id else ["exec"]
+    cmd += ["--", prompt]
     if IS_WINDOWS and len(subprocess.list2cmdline(cmd)) > WINDOWS_CMDLINE_MAX:
         cmd[-1] = spill_prompt(prompt)
     try:
@@ -2190,10 +2194,12 @@ def windows_processes(image_name):
 
 
 def exec_cmdline_matches(cmdline, session_id):
-    """True if a command line is `aside exec --session <session_id> ...`."""
+    """True if a command line runs a turn on `session_id`: the current
+    `aside session resume <id>` or an older CLI's `aside exec --session
+    <id>`."""
     return bool(re.search(
-        r'(^|\s)exec\s+--session\s+"?%s"?(\s|$)' % re.escape(session_id),
-        cmdline or ""))
+        r'(^|\s)(session\s+resume|exec\s+--session)\s+"?%s"?(\s|$)'
+        % re.escape(session_id), cmdline or ""))
 
 
 def stale_exec_pids_windows(session_id):
@@ -2203,7 +2209,7 @@ def stale_exec_pids_windows(session_id):
 
 
 def _reap_stale_exec(session_id):
-    """Kill any leftover 'aside exec --session <sid>' process still
+    """Kill any leftover 'aside session resume <sid>' process still
     running from before this restart.
 
     Without this, a restart while a turn is still mid-flight (crash,
@@ -2224,7 +2230,8 @@ def _reap_stale_exec(session_id):
             pids = stale_exec_pids_windows(session_id)
         else:
             out = subprocess.run(
-                ["pgrep", "-f", "aside exec --session %s " % session_id],
+                ["pgrep", "-f", "aside .*(session resume|exec --session) "
+                 "%s( |$)" % re.escape(session_id)],
                 capture_output=True, text=True)
             pids = [p for p in out.stdout.split() if p.isdigit()]
         for pid in pids:
