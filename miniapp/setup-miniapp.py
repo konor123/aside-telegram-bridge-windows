@@ -141,7 +141,10 @@ def build():
         sys.exit(1)
 
     for args, label in (
-        (["install"], "installing dependencies"),
+        # `ci` never rewrites package-lock.json; `install` does whenever
+        # the local npm formats it differently, and a modified tracked file
+        # blocks `bridgemon update`.
+        (["ci"], "installing dependencies"),
         (["run", "build"], "building the server and web app"),
     ):
         say("  %s%s...%s" % (DIM, label, RESET))
@@ -439,7 +442,7 @@ def main():
 
     step(1, total, "Checking prerequisites")
     check_node()
-    # Resolved before the build, not after: `npm install && npm run build`
+    # Resolved before the build, not after: `npm ci && npm run build`
     # takes minutes, and finding out afterwards that there is no bridge
     # config to read wastes all of it.
     config_path = discover_config()

@@ -190,7 +190,7 @@ both services:
   plus a one-key kill switch.
 - `bridgemon update` -- pull the latest version, syntax-check, restart, and
   auto-rollback if anything looks broken. When the Mini App is installed it
-  is rebuilt (`npm install && npm run build`) and restarted too, with the
+  is rebuilt (`npm ci && npm run build`) and restarted too, with the
   same snapshot-and-roll-back rule.
 - `bridgemon miniapp start|stop|restart|logs` -- the Mini App on its own.
 - `bridgemon logs` / `rollback` / `init` -- the rest.

@@ -452,11 +452,17 @@ def _prune_miniapp_snapshots(keep=3):
 
 
 def _miniapp_build():
-    """`npm install && npm run build` in miniapp/. Returns (ok, message)."""
+    """`npm ci && npm run build` in miniapp/. Returns (ok, message).
+
+    `ci`, not `install`: install rewrites package-lock.json whenever the
+    local npm formats it differently from the one that committed it, and
+    a modified tracked file makes the next `bridgemon update` refuse to
+    pull. ci installs exactly what the lockfile says and never writes it.
+    """
     npm = _npm()
     if not npm:
         return False, "npm not found on PATH -- install Node 20+ first"
-    for args in (["install"], ["run", "build"]):
+    for args in (["ci"], ["run", "build"]):
         print("  npm %s..." % " ".join(args))
         proc = subprocess.run([npm, *args], cwd=MINIAPP_DIR)
         if proc.returncode != 0:

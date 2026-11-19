@@ -95,7 +95,7 @@ python miniapp\setup-miniapp.py
 
 (`python3 miniapp/setup-miniapp.py` on macOS.)
 
-That checks Node and finds the bridge config, runs `npm install && npm run
+That checks Node and finds the bridge config, runs `npm ci && npm run
 build`, installs a background service (the scheduled task `AsideMiniApp` on
 Windows, the launchd service `com.aside.miniapp` on macOS), starts a
 Cloudflare quick tunnel, registers the bot's menu button at the tunnel
@@ -114,7 +114,7 @@ To do it by hand instead:
 
 ```bash
 cd miniapp
-npm install
+npm ci
 npm run build
 npm start          # serves on 127.0.0.1:8790
 ```
