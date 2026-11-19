@@ -379,7 +379,35 @@ def offer_saved_sessions(cli):
         ok("Aside keeps CLI sessions")
 
 
-def register_bot_commands(token):
+def stale_command_scopes(chat_id):
+    """Command scopes that would hide the bridge's menu.
+
+    Telegram shows the most specific list it has: one set for this chat
+    beats one for all private chats, which beats the default. A token that
+    served another bot before often still carries such lists, and the
+    bridge's commands -- registered at the default scope -- then never
+    show.
+    """
+    return [
+        {"type": "all_private_chats"},
+        {"type": "all_group_chats"},
+        {"type": "all_chat_administrators"},
+        {"type": "chat", "chat_id": chat_id},
+    ]
+
+
+def register_bot_commands(token, chat_id=None):
+    cleared = 0
+    for scope in stale_command_scopes(chat_id) if chat_id else []:
+        try:
+            if tg(token, "getMyCommands",
+                  {"scope": json.dumps(scope)}).get("result"):
+                tg(token, "deleteMyCommands", {"scope": json.dumps(scope)})
+                cleared += 1
+        except Exception:
+            pass
+    if cleared:
+        ok("cleared %d command list(s) left by a previous bot" % cleared)
     cmds = [
         {"command": "status", "description": "model, session, queue"},
         {"command": "usage", "description": "usage + context fill"},
@@ -692,7 +720,7 @@ def main():
     name, style = step_preferences(detected_name)
     write_config(token, chat_id, name, style, cli)
     offer_saved_sessions(cli)
-    register_bot_commands(token)
+    register_bot_commands(token, chat_id)
     started = install_service()
     offer_bridgemon()
 

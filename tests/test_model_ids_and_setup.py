@@ -383,6 +383,34 @@ try:
 finally:
     shutil.rmtree(logs, ignore_errors=True)
 
+# ---- command menu: lists a previous bot left behind are cleared -----
+print("\nbot command menu")
+CALLS = []
+LEFTOVERS = {"all_private_chats", "chat"}
+
+
+def fake_setup_tg(token, method, params=None, timeout=30):
+    scope = json.loads((params or {}).get("scope", "{}")).get("type")
+    CALLS.append((method, scope))
+    if method == "getMyCommands":
+        return {"ok": True, "result": [{"command": "x"}]
+                if scope in LEFTOVERS else []}
+    return {"ok": True, "result": True}
+
+
+saved_setup_tg = setup.tg
+setup.tg = fake_setup_tg
+setup.ok = setup.warn = lambda *a, **k: None
+try:
+    setup.register_bot_commands("123:TOKEN", 8675309)
+finally:
+    setup.tg = saved_setup_tg
+deleted = [scope for method, scope in CALLS if method == "deleteMyCommands"]
+check("only the scopes that hold a list are cleared",
+      sorted(deleted) == ["all_private_chats", "chat"])
+check("the bridge's own menu is set after the clearing",
+      CALLS[-1][0] == "setMyCommands")
+
 shutil.rmtree(FIXTURE_ROOT, ignore_errors=True)
 
 print("\n%d failed" % len(fails))
