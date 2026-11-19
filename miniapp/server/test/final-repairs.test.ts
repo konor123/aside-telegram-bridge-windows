@@ -30,7 +30,7 @@ import {
 import { buildServer } from '../src/app.js';
 import { loadConfig, loadOrCreateJwtSecret } from '../src/config.js';
 import { mintToken } from '../src/auth.js';
-import { OWNER_ID, makeTestEnv, type TestEnv } from './helpers.js';
+import { OWNER_ID, makeTestEnv, type TestEnv, ON_WINDOWS } from './helpers.js';
 
 const temps: string[] = [];
 function tempDir(): string {
@@ -78,7 +78,7 @@ describe('a managed cloudflared is revalidated, not just found', () => {
     expect(managedBinaryFault(target, dir)).toBeNull();
   });
 
-  it('reports a lost executable bit', () => {
+  it.skipIf(ON_WINDOWS)('reports a lost executable bit', () => {
     // The reported failure: a managed binary at 0644. It hashes correctly
     // and cannot be spawned, so a digest-only check would miss it.
     const { dir, target } = managed('pretend-cloudflared-binary', 0o644);
@@ -102,7 +102,7 @@ describe('a managed cloudflared is revalidated, not just found', () => {
     expect(fs.existsSync(target)).toBe(true);
   });
 
-  it('re-acquisition restores a lost executable bit in place', async () => {
+  it.skipIf(ON_WINDOWS)('re-acquisition restores a lost executable bit in place', async () => {
     const { dir, target } = managed('pretend-cloudflared-binary', 0o644);
     const logs: string[] = [];
     globalThis.fetch = (async () => {

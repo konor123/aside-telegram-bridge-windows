@@ -79,9 +79,11 @@ try:
     b = import_bridge("empty")
 
     check("an empty sessions_dir does not become ''",
-          b.SESSIONS_DIR != "" and b.SESSIONS_DIR.endswith("/sessions"))
+          b.SESSIONS_DIR != ""
+          and os.path.basename(b.SESSIONS_DIR) == "sessions")
     check("an empty aside_cli does not become ''",
-          b.ASIDE_CLI != "" and b.ASIDE_CLI.endswith("aside"))
+          b.ASIDE_CLI != ""
+          and os.path.basename(b.ASIDE_CLI) in ("aside", "aside.exe"))
     check("an empty credentials_path does not become ''",
           b.CREDENTIALS_PATH != ""
           and b.CREDENTIALS_PATH.endswith("credentials.json"))
@@ -97,7 +99,8 @@ try:
     write_config({"sessions_dir": "   ", "aside_cli": "", "credentials_path": ""})
     b2 = import_bridge("blank")
     check("a whitespace sessions_dir is detected, not used verbatim",
-          b2.SESSIONS_DIR.strip() != "" and b2.SESSIONS_DIR.endswith("/sessions"))
+          b2.SESSIONS_DIR.strip() != ""
+          and os.path.basename(b2.SESSIONS_DIR) == "sessions")
 
     # ---- 3. an explicit path is still honoured ----------------------
     print("\na set path is still used exactly")
@@ -159,11 +162,13 @@ try:
     detected = setup.detect_aside_paths()
 
     # A user who moved their Aside install and said so in config.json.
+    # The CLI has to exist to be kept, so it is this interpreter: a file
+    # that is there on every platform.
     mine = {
         "sessions_dir": "/Volumes/Work/aside/sessions",
         "credentials_path": "/Volumes/Work/aside/credentials.json",
         "state_db_path": "/Volumes/Work/aside/state.db",
-        "aside_cli": "/bin/echo",
+        "aside_cli": sys.executable,
     }
     write_config(dict(mine, token="1234567890:TEST", chat_id=8675309))
 

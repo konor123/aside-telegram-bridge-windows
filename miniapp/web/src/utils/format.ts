@@ -34,7 +34,7 @@ export function threadErrorText(error: unknown): string {
 
   switch (reason) {
     case 'session_not_found':
-      return 'This chat is no longer on your Mac.';
+      return 'This chat is no longer on your computer.';
     case 'bad_session_id':
       return 'That link points at a chat that does not exist.';
     case 'transcript_too_large':
@@ -47,7 +47,7 @@ export function threadErrorText(error: unknown): string {
   }
   // A network failure surfaces as a bare TypeError from fetch.
   if (/failed to fetch|networkerror|load failed/i.test(raw)) {
-    return 'Cannot reach your Mac. Check that it is awake and online.';
+    return 'Cannot reach your computer. Check that it is awake and online.';
   }
   return reason || 'Something went wrong loading this chat.';
 }

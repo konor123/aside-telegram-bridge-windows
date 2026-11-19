@@ -1,4 +1,4 @@
-# aside-telegram-bridge
+# aside-telegram-bridge for Windows
 
 Text your [Aside](https://aside.so) browser agent from your phone.
 
@@ -8,11 +8,14 @@ progress fold into a tidy collapsible worklog when it's done.
 
 ## Install (one command)
 
-Open Terminal and paste:
+Open PowerShell and paste:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/SaiAmartya/aside-telegram-bridge/main/install.sh | bash
+```powershell
+irm https://raw.githubusercontent.com/konor123/aside-telegram-bridge-windows/main/install.ps1 | iex
 ```
+
+It clones the bridge into `%USERPROFILE%\aside-telegram-bridge` (set
+`ASIDE_BRIDGE_DIR` first to put it elsewhere) and starts the setup wizard.
 
 The setup wizard walks you through the rest:
 
@@ -20,7 +23,8 @@ The setup wizard walks you through the rest:
    in Telegram, send `/newbot`, copy the token it gives you.
 2. You text your new bot once -- the wizard detects you automatically.
 3. Pick a reply style. The chat bridge installs itself as a background
-   service and your bot answers from then on, even after reboots.
+   task that starts when you sign in to Windows, and your bot answers from
+   then on, even after reboots.
 4. It then offers the Mini App and defaults to yes. That step builds the
    web app, so it takes a few minutes on a first run; the chat bridge is
    already working while it does. It finishes by printing your public
@@ -29,19 +33,28 @@ The setup wizard walks you through the rest:
 Budget about two minutes of your attention and a few more of waiting.
 Everything after the token is either automatic or a yes/no.
 
-No dependencies, no pip installs, no webhooks, no ports. Plain Python that
-ships with macOS, talking outbound to Telegram only.
+No pip installs, no webhooks, no inbound ports. Plain Python standard
+library, talking outbound to Telegram only.
 
-Requirements: a Mac with [Aside](https://aside.so) installed, and a
-Telegram account. The [Mini App](#the-mini-app) also needs Node 20+ --
-the installer checks for it up front and tells you how to add it later if
-it is missing, rather than failing halfway.
+Requirements:
+
+- Windows 10 or 11 with [Aside](https://aside.so) installed and signed in.
+- The Aside CLI. In the Aside browser: **Settings > Developers > Install
+  Aside CLI**. It lands in `%LOCALAPPDATA%\Aside\CLI`, and the wizard
+  finds it there.
+- Python 3.9+ (`winget install Python.Python.3.12`) and Git
+  (`winget install Git.Git`).
+- A Telegram account.
+- For the [Mini App](#the-mini-app), Node 20+
+  (`winget install OpenJS.NodeJS.LTS`). The installer checks for it up
+  front and tells you how to add it later if it is missing, rather than
+  failing halfway.
 
 Nothing needs configuring by hand. The wizard finds which Aside account
-you are signed in to (`~/.aside/accounts.json`), writes the matching
-session, credential and database paths, and deliberately pins no model:
-the Mini App reads your desktop app's own default and full provider list
-live, so the phone always shows what the browser shows.
+you are signed in to (`%USERPROFILE%\.aside\accounts.json`), writes the
+matching session, credential and database paths, and deliberately pins no
+model: the Mini App reads your desktop app's own default and full provider
+list live, so the phone always shows what the browser shows.
 
 ## What it feels like
 
@@ -108,7 +121,7 @@ the same screen with the conversation in it.
 
 Tap the **Aside** button next to the message box and you get:
 
-- **Sessions** -- every Aside session on your Mac, including the ones
+- **Sessions** -- every Aside session on your computer, including the ones
   started from the desktop app, with unread dots and live status.
 - **Live transcripts** -- tool calls stream in as they happen, then fold
   into one `Worked for 7m 43s ›` row the moment the answer starts. Tap to
@@ -134,17 +147,18 @@ Tap the **Aside** button next to the message box and you get:
   the same daemon state the desktop app reads, plus a settings screen for
   what new sessions should default to.
 
-Setup is one prompt at the end of the wizard, or run it later:
+Setup is one prompt at the end of the wizard, or run it later from the
+checkout:
 
-```bash
-python3 miniapp/setup-miniapp.py
+```powershell
+python miniapp\setup-miniapp.py
 ```
 
-It checks for Node 20+, builds the app, installs a launchd service
-(`com.aside.miniapp`), starts a Cloudflare quick tunnel so Telegram can
-reach it over HTTPS, and points the bot's menu button at it -- that button
-is the **Aside** entry you tap. Quick-tunnel URLs rotate on restart and the
-server re-registers the button each time, so it keeps working.
+It checks for Node 20+, builds the app, registers a second background task
+(`AsideMiniApp`), starts a Cloudflare quick tunnel so Telegram can reach it
+over HTTPS, and points the bot's menu button at it -- that button is the
+**Aside** entry you tap. Quick-tunnel URLs rotate on restart and the server
+re-registers the button each time, so it keeps working.
 
 **How auth works.** Telegram signs every Mini App launch with an HMAC over
 your bot token; the server validates that signature, checks the user id
@@ -166,7 +180,9 @@ turn but not steer one.
 
 ## Managing it
 
-Setup links a `bridgemon` command into `~/bin`. It manages both services:
+Setup puts a `bridgemon` command in `%USERPROFILE%\bin` and offers to add
+that folder to your user PATH (open a new terminal afterwards). It manages
+both services:
 
 - `bridgemon status` -- bridge and Mini App together: running state, pid,
   port, tunnel URL, last error, last log lines.
@@ -181,9 +197,17 @@ Setup links a `bridgemon` command into `~/bin`. It manages both services:
 
 To stop everything: `bridgemon watch --kill` and `bridgemon miniapp stop`.
 
+Both services are ordinary entries in Task Scheduler (`AsideTelegramBridge`
+and `AsideMiniApp`), triggered when you sign in. Each one runs a small
+supervisor that restarts its process if it exits and stops the whole
+process tree with it. Output goes to `service.out.log` / `service.err.log`
+next to `bridge.py`, and `miniapp.out.log` / `miniapp.err.log` for the
+Mini App.
+
 ## Security, the short version
 
-- Your bot token is a credential. `config.json` is chmod 600 and gitignored.
+- Your bot token is a credential. `config.json` lives in your user profile,
+  which only your account (and administrators) can read, and is gitignored.
 - Hard allowlist: the bridge ignores every Telegram chat except yours.
   Strangers get silence.
 - Bridge sessions run with full tool access so the agent can actually do
@@ -197,7 +221,7 @@ To stop everything: `bridgemon watch --kill` and `bridgemon miniapp stop`.
 <summary><b>Architecture</b> (for the curious)</summary>
 
 ```
-Telegram  <--long poll-->  bridge.py (launchd daemon)  <--aside CLI-->  Aside agent
+Telegram  <--long poll-->  bridge.py (background task)  <--aside CLI-->  Aside agent
                             |  poller thread: getUpdates, commands, photos
                             |  worker thread: one turn at a time, batching
                             |  TurnStream: ack / status-fold / final routing
@@ -261,8 +285,10 @@ an approval, a blocker) escapes the fold and pings for real.
   from the Mini App's composer — the server kills the `aside exec` child it
   owns — but stopping is not steering.
 - **Serial by design.** One turn at a time; adjacent messages batch.
-- **macOS only** as written (launchd, Aside's file layout). The Telegram
-  and transcript logic is portable if someone wants to PR Linux support.
+- **Windows and macOS.** This fork installs on Windows through Task
+  Scheduler; the macOS launchd path from upstream is still in the code.
+  The Telegram and transcript logic is portable if someone wants to PR
+  Linux support.
 - `/usage` reads Anthropic's OAuth usage endpoint via the claude-code
   token Aside stores locally; on other providers that section silently
   degrades and the rest still works.
@@ -270,22 +296,20 @@ an approval, a blocker) escapes the fold and pings for real.
 </details>
 
 <details>
-<summary><b>Manual setup</b> (if you'd rather not pipe curl to bash)</summary>
+<summary><b>Manual setup</b> (if you'd rather not pipe a script into iex)</summary>
 
-```bash
-git clone https://github.com/SaiAmartya/aside-telegram-bridge
-cd aside-telegram-bridge
-python3 setup.py
+```powershell
+git clone https://github.com/konor123/aside-telegram-bridge-windows "$HOME\aside-telegram-bridge"
+cd "$HOME\aside-telegram-bridge"
+python setup.py
 ```
 
 The wizard is the same either way. Fully manual (no wizard): copy
 `config.example.json` to `config.json`, fill in `token` / `chat_id` /
-`owner_name`, chmod 600 it, then install
-`com.aside.telegram-bridge.plist` into `~/Library/LaunchAgents` with the
-paths corrected, and `launchctl bootstrap gui/$(id -u) <plist>`.
+`owner_name`, and run `python bridge.py` in a terminal you leave open.
 Leave `aside_cli` / `sessions_dir` / `credentials_path` empty and they are
 detected from the Aside account you are signed in to; set any of them and
-your value is kept, including across a later `python3 setup.py`.
+your value is kept, including across a later `python setup.py`.
 
 Style: `config.json`'s `"style"` is `"formal"` (default, capitalised
 professional prose) or `"casual"` (deliberately lowercase, dry, texting
@@ -306,13 +330,14 @@ turn to any level (off through ultrabrowse).
 
 | file | purpose |
 |---|---|
-| `install.sh` | the one-line installer (clone/update + run wizard) |
+| `install.ps1` | the one-line Windows installer (clone/update + run wizard) |
 | `setup.py` | interactive setup wizard |
 | `bridge.py` | the daemon (poller + worker + streaming) |
 | `bridgemon.py` | deploy/update/rollback CLI + `watch` |
 | `monitor.py` | live monitor + kill switch (via `bridgemon watch`) |
+| `winsupport.py` | Windows background tasks (Task Scheduler + supervisor), process lookup, console setup |
 | `config.example.json` | reference config |
-| `com.aside.telegram-bridge.plist` | launchd template (manual installs) |
+| `install.sh`, `com.aside.telegram-bridge.plist` | macOS installer and launchd template |
 | `miniapp/` | the Telegram Mini App: Fastify server + React web app |
 | `miniapp/setup-miniapp.py` | Mini App setup wizard (Node, build, service) |
 | `docs/MINIAPP.md` | Mini App: how it works, setup, limitations |
@@ -331,3 +356,6 @@ account auto-detection and the rebuilt mobile UI came from
 [@Parthkkk](https://github.com/Parthkkk), offered back upstream from a fork
 (MIT, copyright retained in `LICENSE`). The provider-qualified model id map
 came from [@mosidevv](https://github.com/mosidevv).
+
+This Windows edition is a fork of
+[SaiAmartya/aside-telegram-bridge](https://github.com/SaiAmartya/aside-telegram-bridge).

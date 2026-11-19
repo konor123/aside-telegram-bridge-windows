@@ -31,7 +31,7 @@ import { MAX_HISTORY_BYTES, readHistory, transcriptTooLarge } from '../src/jsonl
 import { buildServer } from '../src/app.js';
 import { loadConfig, loadOrCreateJwtSecret } from '../src/config.js';
 import { mintToken } from '../src/auth.js';
-import { OWNER_ID, makeTestEnv, type TestEnv } from './helpers.js';
+import { OWNER_ID, makeTestEnv, type TestEnv, ON_WINDOWS } from './helpers.js';
 
 const temps: string[] = [];
 
@@ -439,6 +439,7 @@ describe('routes that used to answer 200 with nothing in it', () => {
      * succeeds, open does not.
      */
     if (process.getuid?.() === 0) return; // root opens anything
+    if (ON_WINDOWS) return; // mode bits do not stop a read there
     fs.chmodSync(artifact, 0o000);
     try {
       const res = await get(

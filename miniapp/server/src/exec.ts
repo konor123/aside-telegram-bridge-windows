@@ -307,6 +307,7 @@ export class TurnRunner extends EventEmitter {
     ];
     const child = this.spawnFn(this.opts.asideCli, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     queue.child = child;
     queue.stopped = false;
@@ -564,7 +565,7 @@ export class TurnRunner extends EventEmitter {
         PROMPT_TERMINATOR,
         request.text,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
     );
     this.pendingChildren.add(child);
 
@@ -674,7 +675,7 @@ export class TurnRunner extends EventEmitter {
       const child = this.spawnFn(
         this.opts.asideCli,
         ['repl', grantFullAccessExpression(sessionId)],
-        { stdio: 'ignore' },
+        { stdio: 'ignore', windowsHide: true },
       );
       /*
        * Tracked, bounded and reaped.

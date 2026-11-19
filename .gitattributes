@@ -1,0 +1,15 @@
+# Check out with LF everywhere, whatever core.autocrlf says: the session
+# fixtures under miniapp/server/test are read at byte offsets, and Python,
+# Node and PowerShell all take LF source as it is.
+* text=auto eol=lf
+
+# cmd.exe misreads batch files with bare LF line endings.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary

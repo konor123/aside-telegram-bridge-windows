@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildInitDataFields, signInitData } from '../../scripts/sign-initdata.mjs';
 import { buildServer } from '../src/app.js';
 import { loadConfig, loadOrCreateJwtSecret } from '../src/config.js';
-import { FAKE_BOT_TOKEN, OWNER_ID, makeTestEnv, type TestEnv } from './helpers.js';
+import { FAKE_BOT_TOKEN, OWNER_ID, makeTestEnv, type TestEnv, ON_WINDOWS } from './helpers.js';
 
 let env: TestEnv;
 let app: FastifyInstance;
@@ -235,7 +235,7 @@ describe('integration smoke', () => {
    * The wait is granted only while the server is mid-turn on that id, so
    * this runs against its own instance with a CLI that stays alive.
    */
-  it('waits for a brand new session’s transcript instead of failing', async () => {
+  it.skipIf(ON_WINDOWS)('waits for a brand new session’s transcript instead of failing', async () => {
     const slowEnv = makeTestEnv();
     const slowCli = path.join(slowEnv.root, 'slow-cli.sh');
     fs.writeFileSync(slowCli, '#!/bin/sh\nsleep 20\n', { mode: 0o755 });

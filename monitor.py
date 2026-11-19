@@ -21,18 +21,57 @@ Flags: --status (print snapshot and exit), --kill, --start
 import json
 import os
 import re
-import select
 import subprocess
 import sys
-import termios
 import time
-import tty
+
+IS_WINDOWS = os.name == "nt"
+if IS_WINDOWS:
+    import msvcrt
+else:
+    import select
+    import termios
+    import tty
 
 BRIDGE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BRIDGE_DIR, "bridge.log")
 STATE_PATH = os.path.join(BRIDGE_DIR, "state.json")
-SESSIONS_DIR = os.path.expanduser("~/.aside/u/0/sessions")
-UID = os.getuid()
+CONFIG_PATH = os.path.join(BRIDGE_DIR, "config.json")
+
+
+def _read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _sessions_dir():
+    """The sessions directory the bridge uses: config.json's, else the
+    signed-in Aside account's (the same detection bridge.py does)."""
+    raw = str(_read_json(CONFIG_PATH).get("sessions_dir") or "").strip()
+    if raw:
+        return os.path.expanduser(raw)
+    current = _read_json(
+        os.path.expanduser("~/.aside/accounts.json")).get("currentAccountId")
+    if not isinstance(current, int) or isinstance(current, bool) \
+            or current < 0:
+        current = 0
+    return os.path.expanduser("~/.aside/u/%d/sessions" % current)
+
+
+SESSIONS_DIR = _sessions_dir()
+
+
+def _uid():
+    return os.getuid()
+
+
+def _ws():
+    import winsupport
+    return winsupport
 
 # The label is DETECTED, not hardcoded.
 #
@@ -75,17 +114,15 @@ def now():
 
 
 def load_state():
-    try:
-        with open(STATE_PATH) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    return _read_json(STATE_PATH)
 
 
 def bridge_pid():
     try:
+        if IS_WINDOWS:
+            return _ws().status(bridge_label())["pid"]
         out = subprocess.run(
-            ["launchctl", "print", "gui/%d/%s" % (UID, bridge_label())],
+            ["launchctl", "print", "gui/%d/%s" % (_uid(), bridge_label())],
             capture_output=True, text=True).stdout
         m = re.search(r"pid = (\d+)", out)
         return int(m.group(1)) if m else None
@@ -93,9 +130,18 @@ def bridge_pid():
         return None
 
 
+def _cli_image():
+    """The aside CLI's executable name, as the process table shows it."""
+    raw = str(_read_json(CONFIG_PATH).get("aside_cli") or "").strip()
+    return os.path.basename(raw) if raw else "aside.exe"
+
+
 def exec_pids():
     """PIDs of in-flight aside CLI turns spawned by the bridge."""
     try:
+        if IS_WINDOWS:
+            return [pid for pid, cmdline in _ws().find_processes(_cli_image())
+                    if re.search(r"(^|\s)exec(\s|$)", cmdline)]
         out = subprocess.run(["pgrep", "-f", "MacOS/aside exec"],
                              capture_output=True, text=True).stdout
         return [int(p) for p in out.split()]
@@ -119,8 +165,7 @@ def status_line():
 def kill_bridge():
     print(paint("red", "%s >>> KILL: stopping bridge + in-flight turns"
                 % now()))
-    subprocess.run(["launchctl", "bootout", "gui/%d/%s" % (UID, bridge_label())],
-                   capture_output=True)
+    stop_service()
     for pid in exec_pids():
         try:
             os.kill(pid, 15)
@@ -131,11 +176,24 @@ def kill_bridge():
     print(status_line())
 
 
+def stop_service():
+    if IS_WINDOWS:
+        _ws().stop(bridge_label())
+        return
+    subprocess.run(
+        ["launchctl", "bootout", "gui/%d/%s" % (_uid(), bridge_label())],
+        capture_output=True)
+
+
 def start_bridge():
     print(paint("green", "%s >>> starting bridge" % now()))
-    subprocess.run(["launchctl", "bootstrap", "gui/%d" % UID, bridge_plist()],
-                   capture_output=True)
-    time.sleep(1.5)
+    if IS_WINDOWS:
+        _ws().start(bridge_label())
+    else:
+        subprocess.run(
+            ["launchctl", "bootstrap", "gui/%d" % _uid(), bridge_plist()],
+            capture_output=True)
+        time.sleep(1.5)
     print(status_line())
 
 
@@ -149,7 +207,7 @@ class Tail:
     def lines(self):
         if self.f is None:
             try:
-                self.f = open(self.path)
+                self.f = open(self.path, encoding="utf-8", errors="replace")
                 if self.from_end:
                     self.f.seek(0, 2)
                 self.pos = self.f.tell()
@@ -207,7 +265,22 @@ def fmt_agent_event(m):
     return out
 
 
+def read_key(timeout):
+    """One lowercased keypress within `timeout` seconds, or None."""
+    if IS_WINDOWS:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if msvcrt.kbhit():
+                return msvcrt.getwch().lower()
+            time.sleep(0.05)
+        return None
+    r, _, _ = select.select([sys.stdin], [], [], timeout)
+    return sys.stdin.read(1).lower() if r else None
+
+
 def main():
+    if IS_WINDOWS:
+        _ws().setup_console()
     try:
         sys.stdout.reconfigure(line_buffering=True)
     except AttributeError:
@@ -233,7 +306,8 @@ def main():
     last_status = 0
 
     interactive = sys.stdin.isatty()
-    if interactive:
+    raw_tty = interactive and not IS_WINDOWS
+    if raw_tty:
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
         tty.setcbreak(fd)
@@ -241,22 +315,17 @@ def main():
         while True:
             # keypresses
             if interactive:
-                r, _, _ = select.select([sys.stdin], [], [], 0.5)
-                if r:
-                    ch = sys.stdin.read(1).lower()
-                    if ch == "q":
-                        print("bye. bridge unaffected.")
-                        return
-                    if ch == "k":
-                        kill_bridge()
-                    elif ch == "r":
-                        subprocess.run(
-                            ["launchctl", "bootout",
-                             "gui/%d/%s" % (UID, bridge_label())],
-                            capture_output=True)
-                        start_bridge()
-                    elif ch == "s":
-                        print(status_line())
+                ch = read_key(0.5)
+                if ch == "q":
+                    print("bye. bridge unaffected.")
+                    return
+                if ch == "k":
+                    kill_bridge()
+                elif ch == "r":
+                    stop_service()
+                    start_bridge()
+                elif ch == "s":
+                    print(status_line())
             else:
                 time.sleep(0.5)
 
@@ -291,7 +360,7 @@ def main():
     except KeyboardInterrupt:
         print("\nbye. bridge unaffected.")
     finally:
-        if interactive:
+        if raw_tty:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 

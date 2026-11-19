@@ -6,6 +6,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,9 +18,12 @@ spec.loader.exec_module(b)
 # bridge.py resolves ASIDE_CLI/SESSIONS_DIR from config via ~ which
 # depends on $HOME; if a sandboxed runner has a different $HOME, fall
 # back to the invoking user's real home (no hardcoded username).
-import pwd
-_HOME = pwd.getpwuid(os.getuid()).pw_dir
-if not os.path.exists(b.ASIDE_CLI):
+try:
+    import pwd
+    _HOME = pwd.getpwuid(os.getuid()).pw_dir
+except ImportError:  # Windows
+    _HOME = os.path.expanduser("~")
+if not os.path.exists(b.ASIDE_CLI) and not b.IS_WINDOWS:
     b.ASIDE_CLI = os.path.join(
         _HOME, ".aside/cli/Aside CLI.app/Contents/MacOS/aside")
 if not os.path.isdir(b.SESSIONS_DIR):
@@ -36,7 +40,8 @@ b.tg_delete = lambda *a, **k: None
 MODE = sys.argv[1] if len(sys.argv) > 1 else "approve"
 assert MODE in ("approve", "deny")
 print("MODE:", MODE)
-TARGET = "/tmp/approval_demo_%d.txt" % os.getpid()
+TARGET = os.path.join(tempfile.gettempdir(),
+                      "approval_demo_%d.txt" % os.getpid())
 if os.path.exists(TARGET):
     os.unlink(TARGET)
 

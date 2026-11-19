@@ -20,6 +20,7 @@ miniapp-soft-confirm.json
 # --- logs ----------------------------------------------------------------
 *.log
 *.log.1
+*.log.*
 
 # --- runtime data --------------------------------------------------------
 # Photos and documents that arrived over Telegram, and files uploaded from
@@ -39,6 +40,8 @@ __pycache__/
 
 # --- local-only tooling, not part of the published project ---------------
 .DS_Store
+Thumbs.db
+desktop.ini
 # A stray nested checkout of this same repo; never part of a release.
 /aside-telegram-bridge/
 # Scratch harness used to render the web app at phone size during review.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Interactive setup wizard for aside-telegram-bridge.
 
-Run:  python3 setup.py
+Run:  python3 setup.py      (Windows: python setup.py)
 
 Walks you through everything: bot token, chat id (auto-detected by
 texting your bot), style, service install. Idempotent -- safe to
@@ -25,6 +25,18 @@ BRIDGE_PY = os.path.join(BRIDGE_DIR, "bridge.py")
 LABEL = "com.aside.telegram-bridge"
 PLIST_PATH = os.path.expanduser(
     "~/Library/LaunchAgents/%s.plist" % LABEL)
+
+IS_WINDOWS = os.name == "nt"
+MINIAPP_WIZARD_HINT = (r"python miniapp\setup-miniapp.py" if IS_WINDOWS
+                       else "python3 miniapp/setup-miniapp.py")
+
+
+def _winsupport():
+    if BRIDGE_DIR not in sys.path:
+        sys.path.insert(0, BRIDGE_DIR)
+    import winsupport
+    return winsupport
+
 
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -109,26 +121,40 @@ def detect_aside_paths():
     }
 
 
+def find_aside_cli():
+    """The Aside CLI this machine has installed, or None."""
+    if IS_WINDOWS:
+        return _winsupport().find_aside_cli()
+    cli = os.path.expanduser(
+        "~/.aside/cli/Aside CLI.app/Contents/MacOS/aside")
+    return cli if os.path.exists(cli) else None
+
+
 def step_checks():
     say("%s— Checking your machine —%s" % (BOLD, RESET))
-    if sys.platform != "darwin":
-        fail("this installer supports macOS only (launchd). "
+    if sys.platform not in ("darwin", "win32"):
+        fail("this installer supports Windows and macOS only. "
              "The bridge itself is portable -- PRs welcome.")
         sys.exit(1)
-    ok("macOS")
+    ok("Windows" if IS_WINDOWS else "macOS")
     if sys.version_info < (3, 9):
         fail("Python 3.9+ required (you have %d.%d)"
              % sys.version_info[:2])
         sys.exit(1)
     ok("Python %d.%d" % sys.version_info[:2])
 
-    cli = os.path.expanduser(
-        "~/.aside/cli/Aside CLI.app/Contents/MacOS/aside")
-    if not os.path.exists(cli):
+    cli = find_aside_cli()
+    if not cli:
         warn("Aside CLI not found at the default path.")
-        say("    Install Aside from https://aside.so first, or enter a")
-        say("    custom path if yours lives elsewhere.")
-        custom = ask("  Path to the aside CLI (blank to abort)")
+        if IS_WINDOWS:
+            say("    Install it from the Aside browser: Settings > Developers")
+            say("    > Install Aside CLI. Then re-run this setup, or enter")
+            say("    a custom path if yours lives elsewhere.")
+        else:
+            say("    Install Aside from https://aside.so first, or enter a")
+            say("    custom path if yours lives elsewhere.")
+        # Explorer's "Copy as path" wraps the path in double quotes.
+        custom = ask("  Path to the aside CLI (blank to abort)").strip('"')
         if not custom or not os.path.exists(os.path.expanduser(custom)):
             fail("can't continue without the Aside CLI")
             sys.exit(1)
@@ -235,14 +261,14 @@ def drop_stale_session(cfg):
     if not os.path.exists(state_path):
         return
     try:
-        with open(state_path) as f:
+        with open(state_path, encoding="utf-8") as f:
             state = json.load(f)
     except (ValueError, OSError):
         return
     if not state.pop("session_id", None):
         return
     try:
-        with open(state_path, "w") as f:
+        with open(state_path, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
     except OSError as e:
         warn("couldn't clear the old session from state.json: %s" % e)
@@ -254,7 +280,7 @@ def write_config(token, chat_id, name, style, cli):
     for path in (CONFIG_PATH, EXAMPLE_PATH):
         if os.path.exists(path):
             try:
-                with open(path) as f:
+                with open(path, encoding="utf-8") as f:
                     cfg = json.load(f)
                 if path == CONFIG_PATH:
                     prior = dict(cfg)
@@ -304,10 +330,16 @@ def write_config(token, chat_id, name, style, cli):
     cfg.setdefault("default_effort", "medium")
     if persona_changed:
         drop_stale_session(cfg)
-    with open(CONFIG_PATH, "w") as f:
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
-    os.chmod(CONFIG_PATH, 0o600)
-    ok("config.json written (chmod 600 -- keep it private)")
+    if IS_WINDOWS:
+        # Under the user profile the file inherits a user-only ACL; mode
+        # bits mean nothing here.
+        ok("config.json written (it holds your bot token -- keep it "
+           "private)")
+    else:
+        os.chmod(CONFIG_PATH, 0o600)
+        ok("config.json written (chmod 600 -- keep it private)")
     if persona_changed:
         ok("style changed -- the next message starts a fresh session so "
            "it takes effect")
@@ -329,9 +361,44 @@ def register_bot_commands(token):
         warn("couldn't register the command menu (cosmetic, skipping)")
 
 
+def bless_current_bridge():
+    """Mark this bridge.py as known-good for `bridgemon update` rollbacks."""
+    try:
+        subprocess.run(
+            [sys.executable, os.path.join(BRIDGE_DIR, "bridgemon.py"),
+             "init"], capture_output=True, timeout=15)
+    except Exception:
+        pass
+
+
+def install_service_windows():
+    ws = _winsupport()
+    name = ws.BRIDGE_SERVICE
+    ws.stop(name)
+    registered, message = ws.install(
+        name, [ws.console_python(), BRIDGE_PY], BRIDGE_DIR,
+        os.path.join(BRIDGE_DIR, "service.out.log"),
+        os.path.join(BRIDGE_DIR, "service.err.log"),
+        description="Aside Telegram bridge (aside-telegram-bridge)")
+    if not registered:
+        fail("couldn't register the scheduled task: %s" % message)
+        say("  You can start it manually with: python bridge.py")
+        return False
+    ok("service installed (starts at sign-in, restarts on crash)")
+    bless_current_bridge()
+    if ws.start(name):
+        ok("bridge is running")
+    else:
+        warn("service installed but not confirmed running yet; "
+             "check service.err.log if the bot doesn't answer")
+    return True
+
+
 def install_service():
     say("")
     say("%s— Installing the background service —%s" % (BOLD, RESET))
+    if IS_WINDOWS:
+        return install_service_windows()
     plist = {
         "Label": LABEL,
         "ProgramArguments": ["/usr/bin/python3", BRIDGE_PY],
@@ -355,14 +422,7 @@ def install_service():
         say("  You can start it manually with: python3 bridge.py")
         return False
     ok("service installed (starts on login, restarts on crash)")
-
-    # bless this bridge.py as known-good for `bridgemon update` rollbacks
-    try:
-        subprocess.run(
-            [sys.executable, os.path.join(BRIDGE_DIR, "bridgemon.py"),
-             "init"], capture_output=True, timeout=15)
-    except Exception:
-        pass
+    bless_current_bridge()
 
     # health check: process alive after a few seconds?
     time.sleep(4)
@@ -396,8 +456,52 @@ def shell_rc():
 def on_path(bin_dir):
     entries = [os.path.expanduser(p)
                for p in os.environ.get("PATH", "").split(os.pathsep) if p]
-    return os.path.realpath(bin_dir) in [os.path.realpath(p)
-                                         for p in entries]
+    if IS_WINDOWS:
+        entries += [os.path.expandvars(p)
+                    for p in _winsupport().user_path_entries()]
+    norm = os.path.normcase(os.path.realpath(bin_dir))
+    return norm in [os.path.normcase(os.path.realpath(p)) for p in entries]
+
+
+def offer_path_fix_windows(bin_dir):
+    if on_path(bin_dir):
+        return
+    say("")
+    warn("%s is not on your PATH, so `bridgemon` won't be found." % bin_dir)
+    if not ask("  Add it to your user PATH? (y/n)", "y").lower() \
+            .startswith("y"):
+        say("  %sSkipped. Call it by path instead:%s" % (DIM, RESET))
+        say("    %s%s status%s"
+            % (DIM, os.path.join(bin_dir, "bridgemon.cmd"), RESET))
+        return
+    try:
+        changed, _ = _winsupport().add_to_user_path(bin_dir)
+    except OSError as e:
+        warn("couldn't update the user PATH: %s" % e)
+        return
+    ok("added to your user PATH -- open a new terminal to use bridgemon"
+       if changed else "already on your user PATH -- open a new terminal")
+
+
+def write_bridgemon_shim(bin_dir):
+    """`bridgemon.cmd` in bin_dir, calling this checkout's bridgemon.py.
+
+    cmd.exe reads batch files in the console's OEM code page, so the file
+    is written in it; a path that code page cannot spell is written as
+    UTF-8 behind `chcp 65001`.
+    """
+    shim = os.path.join(bin_dir, "bridgemon.cmd")
+    line = '"%s" "%s" %%*' % (
+        _winsupport().console_python().replace("%", "%%"),
+        os.path.join(BRIDGE_DIR, "bridgemon.py").replace("%", "%%"))
+    try:
+        body = ("@echo off\r\n%s\r\n" % line).encode("oem")
+    except (UnicodeEncodeError, LookupError):
+        body = ("@echo off\r\nchcp 65001 >nul\r\n%s\r\n"
+                % line).encode("utf-8")
+    with open(shim, "wb") as f:
+        f.write(body)
+    return shim
 
 
 def offer_path_fix(bin_dir):
@@ -441,12 +545,22 @@ def offer_path_fix(bin_dir):
 
 
 def offer_bridgemon():
-    bin_dir = os.path.expanduser("~/bin")
+    bin_dir = os.path.expanduser(os.path.join("~", "bin"))
     link = os.path.join(bin_dir, "bridgemon")
-    v = ask("\n  Add the `bridgemon` command to ~/bin? (y/n)", "y")
+    v = ask("\n  Add the `bridgemon` command to %s? (y/n)"
+            % (bin_dir if IS_WINDOWS else "~/bin"), "y")
     if v.lower().startswith("n"):
         return
     os.makedirs(bin_dir, exist_ok=True)
+    if IS_WINDOWS:
+        try:
+            shim = write_bridgemon_shim(bin_dir)
+        except OSError as e:
+            warn("couldn't write the bridgemon command: %s" % e)
+            return
+        ok("created %s" % shim)
+        offer_path_fix_windows(bin_dir)
+        return
     try:
         if os.path.islink(link) or os.path.exists(link):
             os.remove(link)
@@ -464,8 +578,8 @@ def offer_miniapp():
     Deliberately a separate script rather than more steps here: the Mini
     App needs Node, builds a web app, and installs a second launchd
     service, and none of that should be able to fail the bridge install
-    that just succeeded. Declining leaves a working bridge, and
-    `python3 miniapp/setup-miniapp.py` runs the same thing later.
+    that just succeeded. Declining leaves a working bridge, and the
+    Mini App wizard runs the same thing later.
     """
     wizard = os.path.join(BRIDGE_DIR, "miniapp", "setup-miniapp.py")
     if not os.path.exists(wizard):
@@ -480,19 +594,20 @@ def offer_miniapp():
         % (DIM, RESET))
     if not ask("  Set up the Aside Mini App now? (y/n)",
                "y").lower().startswith("y"):
-        say("  %sSkipped. Run it any time:"
-            " python3 miniapp/setup-miniapp.py%s" % (DIM, RESET))
+        say("  %sSkipped. Run it any time: %s%s"
+            % (DIM, MINIAPP_WIZARD_HINT, RESET))
         return
 
     env = dict(os.environ, MINIAPP_CONFIG=CONFIG_PATH)
     r = subprocess.run([sys.executable, wizard], env=env)
     if r.returncode != 0:
         warn("the Mini App setup did not finish -- the bridge is fine.")
-        say("  %sRe-run it with: python3 miniapp/setup-miniapp.py%s"
-            % (DIM, RESET))
+        say("  %sRe-run it with: %s%s" % (DIM, MINIAPP_WIZARD_HINT, RESET))
 
 
 def main():
+    if IS_WINDOWS:
+        _winsupport().setup_console()
     say("")
     say("%s┌─────────────────────────────────────┐%s" % (BOLD, RESET))
     say("%s│  aside-telegram-bridge setup wizard │%s" % (BOLD, RESET))

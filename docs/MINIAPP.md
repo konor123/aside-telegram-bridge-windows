@@ -1,7 +1,7 @@
 # The Aside Mini App
 
 The full Aside sidepanel UI, inside Telegram, driving the Aside agent
-running on your Mac. Two documents cover it: this one (how it works, and
+running on your computer. Two documents cover it: this one (how it works, and
 how to set it up) and [AUDIT.md](AUDIT.md) (the security review).
 
 ---
@@ -9,7 +9,7 @@ how to set it up) and [AUDIT.md](AUDIT.md) (the security review).
 ## How it works
 
 There is no cloud service and no database. One Node process runs on your
-Mac, drives the Aside CLI, and serves a React app to your phone through a
+computer, drives the Aside CLI, and serves a React app to your phone through a
 tunnel. Everything it knows, it reads off the same disk the desktop app
 uses.
 
@@ -76,7 +76,9 @@ depends on the other.
 
 ### Prerequisites
 
-- macOS with [Aside](https://aside.so) installed and signed in.
+- Windows 10/11 (or macOS) with [Aside](https://aside.so) installed and
+  signed in, and the Aside CLI installed (on Windows: Settings > Developers
+  > Install Aside CLI in the Aside browser).
 - Node 20 or newer (`node --version`).
 - The Telegram chat bridge already installed — the Mini App reads its
   `config.json` for the bot token and your user id. See the
@@ -86,12 +88,15 @@ depends on the other.
 
 From the repo root:
 
-```bash
-python3 miniapp/setup-miniapp.py
+```powershell
+python miniapp\setup-miniapp.py
 ```
 
+(`python3 miniapp/setup-miniapp.py` on macOS.)
+
 That checks Node and finds the bridge config, runs `npm install && npm run
-build`, installs a launchd service (`com.aside.miniapp`), starts a
+build`, installs a background service (the scheduled task `AsideMiniApp` on
+Windows, the launchd service `com.aside.miniapp` on macOS), starts a
 Cloudflare quick tunnel, registers the bot's menu button at the tunnel
 URL, and prints the URL.
 
@@ -120,7 +125,7 @@ Optional. Everything below lives in the `miniapp` section of the bridge's
 `~/aside-telegram-bridge/config.json` for a one-line install). The server
 looks there first and falls back to
 `~/.aside/u/0/telegram-bridge/config.json`; `MINIAPP_CONFIG` overrides
-both, and the launchd service sets it explicitly.
+both, and the background service sets it explicitly.
 
 | key | default | what it does |
 |---|---|---|
@@ -223,8 +228,8 @@ Read these before deciding something is broken.
   chat list filters out. The other direction works completely: anything you
   start on the desktop is visible, continuable and watchable live from your
   phone.
-- **Your Mac has to be awake and online.** The server and the tunnel run on
-  it. Asleep is offline.
+- **Your computer has to be awake and online.** The server and the tunnel
+  run on it. Asleep is offline.
 - **The tunnel URL changes on every restart.** Quick tunnels are ephemeral.
   The server re-registers the menu button at the new hostname each time it
   rotates, so it self-heals — but a saved link goes stale. For a fixed URL,

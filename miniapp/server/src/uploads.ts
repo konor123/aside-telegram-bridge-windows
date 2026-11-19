@@ -181,7 +181,7 @@ export function splitAttachmentHeader(text: string): {
     .map((p) => p.trim())
     .filter(Boolean)
     .map((p) => {
-      const base = p.slice(p.lastIndexOf('/') + 1);
+      const base = p.slice(Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) + 1);
       return { name: base.replace(/^[0-9a-f]{12}-/, '') };
     });
 

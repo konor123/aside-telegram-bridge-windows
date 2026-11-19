@@ -247,7 +247,8 @@ export function iconFor(tool: string): StepIcon {
 }
 
 function basename(p: string): string {
-  const parts = String(p || '').split('/').filter(Boolean);
+  // Windows transcripts carry `C:\Users\...` paths.
+  const parts = String(p || '').split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || String(p || '');
 }
 

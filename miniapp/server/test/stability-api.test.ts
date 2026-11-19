@@ -18,6 +18,7 @@ import {
   defaultFixtureRows,
   makeTestEnv,
   type TestEnv,
+  ON_WINDOWS,
 } from './helpers.js';
 
 let env: TestEnv;
@@ -98,7 +99,7 @@ describe('GET/POST /api/settings', () => {
     // And it is on disk, 0600, outside the repo.
     const file = path.join(path.dirname(env.configPath), 'miniapp-settings.json');
     expect(fs.existsSync(file)).toBe(true);
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (!ON_WINDOWS) expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it('rejects a body that is not an object', async () => {

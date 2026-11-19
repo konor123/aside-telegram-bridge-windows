@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   Tunnel,
   assetFor,
+  cloudflaredBinaryPath,
   ensureCloudflared,
   menuButtonPayload,
   parseTunnelUrl,
@@ -361,7 +362,7 @@ describe('cloudflared integrity (M-6)', () => {
 
   it('reuses a binary that is already there', async () => {
     const dir = tempDir();
-    const bin = path.join(dir, 'cloudflared');
+    const bin = cloudflaredBinaryPath(dir);
     fs.writeFileSync(bin, 'already here');
     globalThis.fetch = (async () => {
       throw new Error('must not download');

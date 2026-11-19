@@ -18,6 +18,7 @@ import {
   saveUpload,
   splitAttachmentHeader,
 } from '../src/uploads.js';
+import { ON_WINDOWS } from './helpers.js';
 
 const temps: string[] = [];
 
@@ -62,8 +63,9 @@ describe('sanitizeFilename', () => {
       expect(safe.startsWith('.')).toBe(false);
       expect(safe).not.toBe('..');
       // The decisive property: joining it cannot leave the root.
-      const joined = path.join('/root', safe);
-      expect(joined.startsWith('/root/')).toBe(true);
+      const root = path.resolve('/root');
+      const joined = path.join(root, safe);
+      expect(joined.startsWith(root + path.sep)).toBe(true);
     }
   });
 
@@ -127,7 +129,7 @@ describe('saveUpload', () => {
     expect(fs.existsSync('/tmp/pwned.sh')).toBe(false);
   });
 
-  it('keeps the directories private', () => {
+  it.skipIf(ON_WINDOWS)('keeps the directories private', () => {
     const root = tempDir();
     const saved = saveUpload(root, 'a.txt', Buffer.from('x'));
     const dirMode = fs.statSync(path.dirname(saved.path)).mode & 0o777;

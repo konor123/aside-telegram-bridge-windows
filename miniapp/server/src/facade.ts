@@ -82,6 +82,7 @@ export function runFacade(
         timeout: opts.timeoutMs ?? 20_000,
         maxBuffer: 64 * 1024 * 1024,
         encoding: 'utf8',
+        windowsHide: true,
       },
       (err, stdout, stderr) => {
         if (err && !stdout.includes(BEGIN)) {

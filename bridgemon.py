@@ -2,7 +2,7 @@
 """bridgemon -- single CLI for the Aside <-> Telegram bridge + Mini App.
 
 Deploy tooling:
-  bridgemon status          both services: launchd state, pid, port,
+  bridgemon status          both services: service state, pid, port,
                              tunnel URL, last log lines
   bridgemon update          git pull (if this is a repo clone), then
                              syntax-check, restart, health-check, and
@@ -46,20 +46,44 @@ import urllib.request
 BRIDGE_DIR = os.path.expanduser(
     os.environ.get("BRIDGEMON_DIR")
     or os.path.dirname(os.path.realpath(__file__)))
+IS_WINDOWS = os.name == "nt"
+MINIAPP_WIZARD = (r"python miniapp\setup-miniapp.py" if IS_WINDOWS
+                  else "python3 miniapp/setup-miniapp.py")
+
 BRIDGE_PY = os.path.join(BRIDGE_DIR, "bridge.py")
 LOG_PATH = os.path.join(BRIDGE_DIR, "bridge.log")
-ERR_LOG_PATH = os.path.join(BRIDGE_DIR, "launchd.err.log")
+#: Where the service manager sends the bridge's stderr (tracebacks land
+#: here). setup.py names it per platform.
+ERR_LOG_PATH = os.path.join(
+    BRIDGE_DIR, "service.err.log" if IS_WINDOWS else "launchd.err.log")
 BACKUP_DIR = os.path.join(BRIDGE_DIR, "backups")
 LAST_GOOD = os.path.join(BACKUP_DIR, "last-good.py")
 
 MINIAPP_DIR = os.path.join(BRIDGE_DIR, "miniapp")
-MINIAPP_LABEL = "com.aside.miniapp"
+MINIAPP_LABEL = "AsideMiniApp" if IS_WINDOWS else "com.aside.miniapp"
 DEFAULT_CONFIG = os.path.join(BRIDGE_DIR, "config.json")
 DEFAULT_MINIAPP_PORT = 8790
 
 
+def _ws():
+    """winsupport.py from the checkout this file belongs to."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import winsupport
+    return winsupport
+
+
 def _uid():
     return os.getuid()
+
+
+def service_installed(lbl):
+    """Whether a service definition exists: a scheduled task on Windows,
+    a plist on disk on macOS."""
+    if IS_WINDOWS:
+        return _ws().installed(lbl)
+    return os.path.exists(plist_path(lbl))
 
 
 def _agents_dir():
@@ -129,7 +153,8 @@ def label():
     has no business paying for that.
     """
     if not _LABEL_CACHE:
-        _LABEL_CACHE.append(_detect_label())
+        _LABEL_CACHE.append(
+            _ws().BRIDGE_SERVICE if IS_WINDOWS else _detect_label())
     return _LABEL_CACHE[0]
 
 
@@ -148,7 +173,15 @@ def _service_target(lbl=None):
 
 
 def service_state(lbl):
-    """(loaded, pid) for a label, read out of launchd's live registry."""
+    """(loaded, pid) for a label, read out of launchd's live registry.
+
+    On Windows "loaded" means the scheduled task exists (or the service
+    runs without one), and the pid is the supervised process itself.
+    """
+    if IS_WINDOWS:
+        st = _ws().status(lbl)
+        pid = str(st["pid"]) if st["pid"] else None
+        return bool(st["installed"] or st["running"]), pid
     r = _print_service(lbl)
     if r.returncode != 0:
         return False, None
@@ -182,6 +215,9 @@ def tail(path, n=30):
 
 
 def kickstart_restart(lbl=None):
+    if IS_WINDOWS:
+        _ws().restart(lbl or label())
+        return
     _launchctl("kickstart", "-k", _service_target(lbl))
 
 
@@ -189,7 +225,7 @@ def kickstart_restart(lbl=None):
 #
 # The Mini App is optional: a bridge install that never ran
 # miniapp/setup-miniapp.py has no `miniapp` config section, no
-# com.aside.miniapp plist and possibly no miniapp/ directory at all.
+# service and possibly no miniapp/ directory at all.
 # Every function below has to read as "not installed" in that case rather
 # than as "broken", which is why they all degrade to None/False instead of
 # raising.
@@ -210,7 +246,7 @@ def config_path():
 def read_config(path=None):
     """The bridge's config.json, or {} if it isn't readable."""
     try:
-        with open(path or config_path()) as fh:
+        with open(path or config_path(), encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return {}
@@ -224,15 +260,15 @@ def miniapp_section(config=None):
 def miniapp_installed():
     """Whether there is a Mini App here to manage at all.
 
-    Any one of a config section, a launchd plist or a built tree counts:
+    Any one of a config section, a service or a built tree counts:
     they come from the same setup run but can outlive each other (a
     booted-out service still has its config; a fresh clone has the tree
     but no config yet).
     """
     return bool(
         miniapp_section()
-        or os.path.exists(plist_path(MINIAPP_LABEL))
         or os.path.isdir(MINIAPP_DIR)
+        or service_installed(MINIAPP_LABEL)
     )
 
 
@@ -253,7 +289,7 @@ def miniapp_state_dir(section=None):
 def miniapp_logs(section=None):
     """Every file the Mini App's output can land in, newest info last.
 
-    setup-miniapp.py points launchd's stdout/stderr at
+    setup-miniapp.py points the service's stdout/stderr at
     `miniapp.out.log` / `miniapp.err.log`, and the server's own rotating
     log is `miniapp.log`. The tunnel URL has appeared in all three
     depending on how the process was started, so all three are read.
@@ -334,7 +370,7 @@ def miniapp_status():
         "installed": miniapp_installed(),
         "label": MINIAPP_LABEL,
         "service_loaded": loaded,
-        "plist": os.path.exists(plist_path(MINIAPP_LABEL)),
+        "plist": service_installed(MINIAPP_LABEL),
         "pid": pid,
         "port": port,
         "healthy": miniapp_health(port),
@@ -350,8 +386,15 @@ def _npm():
     if npm:
         return npm
     # launchd-style minimal PATH is not this process's problem, but a
-    # login shell that never picked up Homebrew is a common one.
-    for candidate in ("/opt/homebrew/bin/npm", "/usr/local/bin/npm"):
+    # login shell that never picked up Homebrew is a common one -- and on
+    # Windows, a terminal opened before Node was installed.
+    candidates = ("/opt/homebrew/bin/npm", "/usr/local/bin/npm")
+    if IS_WINDOWS:
+        candidates = tuple(
+            os.path.join(base, "nodejs", "npm.cmd")
+            for base in (os.environ.get("ProgramFiles"),
+                         os.environ.get("ProgramFiles(x86)")) if base)
+    for candidate in candidates:
         if os.path.exists(candidate):
             return candidate
     return None
@@ -432,7 +475,7 @@ def _miniapp_wait_healthy(port, attempts=15):
 def cmd_miniapp(args):
     sub = args[0] if args else "status"
     if not miniapp_installed():
-        print("no Mini App here -- run: python3 miniapp/setup-miniapp.py")
+        print("no Mini App here -- run: %s" % MINIAPP_WIZARD)
         return 1
 
     if sub == "status":
@@ -450,10 +493,28 @@ def cmd_miniapp(args):
                 print(line)
         return 0
 
+    if sub in ("start", "stop", "restart") and IS_WINDOWS:
+        ws = _ws()
+        if not service_installed(MINIAPP_LABEL) \
+                and not ws.read_spec(MINIAPP_LABEL):
+            print("no %s service installed -- run: %s"
+                  % (MINIAPP_LABEL, MINIAPP_WIZARD))
+            return 1
+        if sub == "stop":
+            ws.stop(MINIAPP_LABEL)
+            print("mini app stopped")
+            return 0
+        started = (ws.start if sub == "start" else ws.restart)(MINIAPP_LABEL)
+        healthy = started and _miniapp_wait_healthy(miniapp_port())
+        print("mini app %s; health check %s"
+              % (sub + "ed" if sub == "start" else "restarted",
+                 "ok" if healthy else "FAILED"))
+        return 0 if healthy else 1
+
     if sub in ("start", "stop", "restart"):
         if not os.path.exists(plist_path(MINIAPP_LABEL)):
-            print("no %s.plist installed -- run: "
-                  "python3 miniapp/setup-miniapp.py" % MINIAPP_LABEL)
+            print("no %s.plist installed -- run: %s"
+                  % (MINIAPP_LABEL, MINIAPP_WIZARD))
             return 1
         target = _service_target(MINIAPP_LABEL)
         if sub == "stop":
@@ -485,8 +546,7 @@ def cmd_miniapp(args):
 
 def _print_miniapp_status(info):
     if not info["installed"]:
-        print("mini app: not installed "
-              "(python3 miniapp/setup-miniapp.py to add it)")
+        print("mini app: not installed (%s to add it)" % MINIAPP_WIZARD)
         return
     print("mini app service: %s" % info["label"])
     if info["service_loaded"]:
@@ -494,7 +554,7 @@ def _print_miniapp_status(info):
     elif info["plist"]:
         state = "installed but not loaded"
     else:
-        state = "no launchd plist (started by hand?)"
+        state = "no background service installed (started by hand?)"
     print("running:  %s" % state)
     print("port:     %d (health %s)"
           % (info["port"], "ok" if info["healthy"] else "no answer"))
@@ -576,15 +636,28 @@ def _read_from(path, offset):
         return ""
 
 
-def _health_check():
+def _log_offsets():
+    return _size(LOG_PATH), _size(ERR_LOG_PATH)
+
+
+def _restart_and_check():
+    """Restart the bridge and health-check it, with the log offsets taken
+    BEFORE the restart. A restart that only returns once the new process
+    is up (Windows) would otherwise let its 'bridge starting' line land
+    before the offset and read as never having started."""
+    offsets = _log_offsets()
+    kickstart_restart()
+    return _health_check(offsets)
+
+
+def _health_check(offsets=None):
     """Poll for HEALTH_WAIT_S seconds. Healthy if the process is up,
     bridge.log shows a fresh 'bridge starting' line, and no traceback
     was appended to the err log -- both measured from byte offsets
-    captured at call time, so stale pre-restart log content (e.g. a
-    traceback from a *previous* failed attempt) never causes a false
-    positive."""
-    log_offset = _size(LOG_PATH)
-    err_offset = _size(ERR_LOG_PATH)
+    captured before the restart (or at call time), so stale pre-restart
+    log content (e.g. a traceback from a *previous* failed attempt) never
+    causes a false positive."""
+    log_offset, err_offset = offsets or _log_offsets()
     deadline = time.time() + HEALTH_WAIT_S
     saw_start = False
     while time.time() < deadline:
@@ -596,7 +669,8 @@ def _health_check():
             saw_start = True
         new_err = _read_from(ERR_LOG_PATH, err_offset)
         if "Traceback (most recent call last)" in new_err:
-            return False, "new traceback in launchd.err.log after restart"
+            return False, ("new traceback in %s after restart"
+                           % os.path.basename(ERR_LOG_PATH))
     if not saw_start:
         return False, "never saw a fresh 'bridge starting' log line"
     return True, "ok"
@@ -614,7 +688,8 @@ def _is_git_repo():
 
 def _git(*args):
     return subprocess.run(
-        ["git", "-C", BRIDGE_DIR, *args], capture_output=True, text=True
+        ["git", "-C", BRIDGE_DIR, *args], capture_output=True, text=True,
+        encoding="utf-8", errors="replace"
     )
 
 
@@ -690,7 +765,7 @@ def _update_miniapp(stamp):
             return False, "%s -- restored the previous build" % message
         return False, message
 
-    if not os.path.exists(plist_path(MINIAPP_LABEL)):
+    if not service_installed(MINIAPP_LABEL):
         _prune_miniapp_snapshots()
         return True, ("rebuilt; no %s service installed, so nothing to "
                       "restart" % MINIAPP_LABEL)
@@ -734,19 +809,17 @@ def cmd_update(_args):
     )
 
     print("restarting bridge to apply update...")
-    kickstart_restart()
-    healthy, reason = _health_check()
+    healthy, reason = _restart_and_check()
 
     if not healthy:
         print("update looked unhealthy (%s) -- rolling back" % reason)
         shutil.copy2(LAST_GOOD, BRIDGE_PY)
-        kickstart_restart()
-        healthy2, reason2 = _health_check()
+        healthy2, reason2 = _restart_and_check()
         if healthy2:
             print("rolled back to last known-good and confirmed healthy")
         else:
             print("rollback restart still unhealthy (%s) -- check logs "
-                  "and the launchd job by hand" % reason2)
+                  "and the background service by hand" % reason2)
         # The bridge is the thing people text; a rolled-back bridge is a
         # failed update whatever the mini app then did.
         return 1
@@ -770,8 +843,7 @@ def cmd_rollback(_args):
         print("no last-good backup on file, nothing to roll back to")
         return 1
     shutil.copy2(LAST_GOOD, BRIDGE_PY)
-    kickstart_restart()
-    healthy, reason = _health_check()
+    healthy, reason = _restart_and_check()
     if healthy:
         print("rolled back to last known-good and confirmed healthy")
         return 0
@@ -798,6 +870,13 @@ def cmd_watch(args):
     if not os.path.exists(monitor_py):
         print("monitor.py not found next to bridgemon.py")
         return 1
+    if IS_WINDOWS:
+        # os.exec* on Windows starts a new process and exits this one, so
+        # the shell gets its prompt back while the monitor still writes.
+        try:
+            return subprocess.call([sys.executable, monitor_py, *args])
+        except KeyboardInterrupt:
+            return 0
     os.execvp(sys.executable, [sys.executable, monitor_py, *args])
 
 
@@ -816,6 +895,8 @@ COMMANDS = {
 
 
 def main():
+    if IS_WINDOWS:
+        _ws().setup_console()
     args = sys.argv[1:]
     if not args:
         print(__doc__)

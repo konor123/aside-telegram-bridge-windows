@@ -75,20 +75,48 @@ export function effortLabel(effort: string): string {
 }
 
 /**
+ * Where the Windows CLI installer puts `aside.exe`, in the order the Aside
+ * daemon itself looks: an `ASIDE_CLI_INSTALL_DIR` override, the default
+ * `%LOCALAPPDATA%\Aside\CLI`, then the two per-user bin folders.
+ */
+export function windowsAsideCliCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
+): string[] {
+  const join = path.win32.join;
+  const local = env.LOCALAPPDATA?.trim() || join(home, 'AppData', 'Local');
+  const custom = env.ASIDE_CLI_INSTALL_DIR?.trim();
+  return [
+    ...(custom ? [join(custom, 'current', 'aside.exe')] : []),
+    join(local, 'Aside', 'CLI', 'current', 'aside.exe'),
+    join(home, '.local', 'bin', 'aside.exe'),
+    join(home, '.aside', 'bin', 'aside.exe'),
+  ];
+}
+
+/**
  * Where the Aside CLI lives, when the config does not say.
  *
- * macOS ships it inside an `.app` bundle; everywhere else it is a plain
- * executable that the installer puts on PATH. Hardcoding the macOS bundle
- * path meant a Linux user who cloned this repo got `ENOENT` on every
- * single spawn -- exec, repl and facade alike -- with nothing pointing at
- * the cause.
+ * macOS ships it inside an `.app` bundle; Windows installs `aside.exe`
+ * per user (see `windowsAsideCliCandidates`); everywhere else it is a
+ * plain executable that the installer puts on PATH. Hardcoding the macOS
+ * bundle path meant a Linux user who cloned this repo got `ENOENT` on
+ * every single spawn -- exec, repl and facade alike -- with nothing
+ * pointing at the cause.
  */
 export function defaultAsideCliPath(
   platform: NodeJS.Platform = process.platform,
+  exists: (p: string) => boolean = fs.existsSync,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = os.homedir(),
 ): string {
-  return platform === 'darwin'
-    ? '~/.aside/cli/Aside CLI.app/Contents/MacOS/aside'
-    : 'aside';
+  if (platform === 'darwin') {
+    return '~/.aside/cli/Aside CLI.app/Contents/MacOS/aside';
+  }
+  if (platform === 'win32') {
+    return windowsAsideCliCandidates(env, home).find((p) => exists(p)) ?? 'aside';
+  }
+  return 'aside';
 }
 
 const DEFAULT_MODEL_ALIASES: Record<string, string> = {
@@ -153,7 +181,9 @@ export interface MiniappConfig {
 
 export function expandHome(p: string): string {
   if (p === '~') return os.homedir();
-  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
   return p;
 }
 

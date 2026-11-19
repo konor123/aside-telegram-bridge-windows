@@ -93,6 +93,27 @@ export function localFileRoots(opts: LocalFileRootsOptions): string[] {
   return roots;
 }
 
+/**
+ * True if `child` is `root` or sits under it. Both are expected to be
+ * realpath'd already.
+ *
+ * Windows paths compare case-insensitively: `c:\users\me` and
+ * `C:\Users\me` are the same directory, and which spelling a realpath
+ * comes back with depends on how it was asked for.
+ */
+export function isWithin(
+  child: string,
+  root: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  const sep = platform === 'win32' ? '\\' : '/';
+  const fold = (p: string) => (platform === 'win32' ? p.toLowerCase() : p);
+  const c = fold(child);
+  const r = fold(root);
+  if (c === r) return true;
+  return c.startsWith(r.endsWith(sep) ? r : r + sep);
+}
+
 export type LocalFileRefusal =
   | 'bad_path'
   | 'forbidden_path'
@@ -136,9 +157,7 @@ export function resolveLocalFile(
     return { ok: false, reason: 'file_not_found' };
   }
 
-  const inside = roots.some(
-    (root) => real === root || real.startsWith(root + path.sep),
-  );
+  const inside = roots.some((root) => isWithin(real, root));
   if (!inside) return { ok: false, reason: 'forbidden_path' };
 
   const contentType = localImageContentType(real);
@@ -162,8 +181,7 @@ export type OpenedLocalFile =
  * there -- passing `undefined` into the flags bitmask would produce NaN
  * and fail every open. Falling back to 0 keeps the descriptor-side checks
  * below, which are the substantive ones; only the "final component is a
- * symlink" refusal is unavailable, and Windows is not a supported target
- * for this server anyway.
+ * symlink" refusal is unavailable there.
  */
 const NOFOLLOW = fs.constants.O_NOFOLLOW ?? 0;
 

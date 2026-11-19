@@ -14,6 +14,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { isWithin } from './localfiles.js';
 
 export type ArtifactGroup = 'artifacts' | 'attachments';
 const ARTIFACT_GROUPS: ArtifactGroup[] = ['artifacts', 'attachments'];
@@ -163,9 +164,7 @@ export function resolveArtifact(
   } catch {
     return null;
   }
-  if (realTarget !== realBase && !realTarget.startsWith(realBase + path.sep)) {
-    return null;
-  }
+  if (!isWithin(realTarget, realBase)) return null;
   return fs.statSync(realTarget, { throwIfNoEntry: false })?.isFile()
     ? realTarget
     : null;

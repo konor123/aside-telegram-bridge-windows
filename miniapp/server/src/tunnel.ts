@@ -67,7 +67,8 @@ function releaseBase(): string {
 const BYO_BINARY_HINT =
   'Point the server at a cloudflared you installed yourself instead: set ' +
   'MINIAPP_CLOUDFLARED_PATH=/path/to/cloudflared, or "cloudflared_path" ' +
-  'in the miniapp section of config.json (`brew install cloudflared`).';
+  'in the miniapp section of config.json (`brew install cloudflared`, or ' +
+  '`winget install Cloudflare.cloudflared` on Windows).';
 
 /** Any trycloudflare hostname the CLI prints as it comes up or rotates. */
 const URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi;
@@ -276,7 +277,7 @@ async function download(
 
 function run(cmd: string, args: string[], cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd }, (err) =>
+    execFile(cmd, args, { cwd, windowsHide: true }, (err) =>
       err ? reject(err) : resolve(),
     );
   });
@@ -818,7 +819,7 @@ export class Tunnel {
         '--url',
         `http://127.0.0.1:${this.opts.port}`,
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true },
     );
     this.child = child;
 

@@ -335,7 +335,7 @@ describe('defaultAsideRoot', () => {
 
   it('reads a real numeric account id', () => {
     expect(defaultAsideRoot(withAccounts('{"currentAccountId":2}'))).toMatch(
-      /\.aside\/u\/2$/,
+      /\.aside[\\/]u[\\/]2$/,
     );
   });
 
@@ -343,16 +343,16 @@ describe('defaultAsideRoot', () => {
     // Number(true) === 1, so `true` used to resolve to a real-looking
     // account directory and point the whole app at the wrong account.
     expect(defaultAsideRoot(withAccounts('{"currentAccountId":true}'))).toMatch(
-      /\.aside\/u\/0$/,
+      /\.aside[\\/]u[\\/]0$/,
     );
     expect(defaultAsideRoot(withAccounts('{"currentAccountId":false}'))).toMatch(
-      /\.aside\/u\/0$/,
+      /\.aside[\\/]u[\\/]0$/,
     );
   });
 
   it('still falls back for junk of every other shape', () => {
     for (const raw of ['[]', 'null', '"u/1"', '{"currentAccountId":-2}', '{']) {
-      expect(defaultAsideRoot(withAccounts(raw))).toMatch(/\.aside\/u\/0$/);
+      expect(defaultAsideRoot(withAccounts(raw))).toMatch(/\.aside[\\/]u[\\/]0$/);
     }
   });
 });

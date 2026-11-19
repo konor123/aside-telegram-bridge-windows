@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildInitDataFields, signInitData } from '../../scripts/sign-initdata.mjs';
 import { buildServer } from '../src/app.js';
 import { loadConfig, loadOrCreateJwtSecret } from '../src/config.js';
-import { FAKE_BOT_TOKEN, OWNER_ID, makeTestEnv, type TestEnv } from './helpers.js';
+import { FAKE_BOT_TOKEN, OWNER_ID, makeTestEnv, type TestEnv, ON_WINDOWS } from './helpers.js';
 
 let env: TestEnv;
 let app: FastifyInstance;
@@ -105,7 +105,7 @@ afterEach(async () => {
 });
 
 describe('GET /api/status defaults', () => {
-  it('reports the DAEMON default, not the bridge config’s', async () => {
+  it.skipIf(ON_WINDOWS)('reports the DAEMON default, not the bridge config’s', async () => {
     const cli = stubCli(env.root, DAEMON_DEFAULT);
     // Node scripts need an interpreter; point the config at node itself
     // via a tiny shell shim so argv[3] is still the repl script.

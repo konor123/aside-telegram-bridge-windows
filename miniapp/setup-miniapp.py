@@ -2,6 +2,7 @@
 """Interactive setup wizard for the Aside Telegram Mini App.
 
 Run:  python3 miniapp/setup-miniapp.py
+      (Windows: python miniapp\\setup-miniapp.py)
 
 Installs the Mini App server alongside the existing chat bridge. The only
 real prerequisite is Node 20+; everything else -- the cloudflared tunnel
@@ -30,8 +31,17 @@ CONFIG_CANDIDATES = (
     os.path.join(BRIDGE_DIR, "config.json"),
     os.path.expanduser("~/.aside/u/0/telegram-bridge/config.json"),
 )
-LABEL = "com.aside.miniapp"
+IS_WINDOWS = os.name == "nt"
+LABEL = "AsideMiniApp" if IS_WINDOWS else "com.aside.miniapp"
 PLIST_PATH = os.path.expanduser("~/Library/LaunchAgents/%s.plist" % LABEL)
+PY = "python" if IS_WINDOWS else "python3"
+
+
+def _winsupport():
+    if BRIDGE_DIR not in sys.path:
+        sys.path.insert(0, BRIDGE_DIR)
+    import winsupport
+    return winsupport
 
 MIN_NODE_MAJOR = 20
 DEFAULT_PORT = 8790
@@ -92,12 +102,18 @@ def check_node():
         fail("Node.js is not installed.")
         say()
         say("  Install it, then re-run this script:")
-        say("    %s- Homebrew:  brew install node%s" % (DIM, RESET))
+        if IS_WINDOWS:
+            say("    %s- winget:    winget install OpenJS.NodeJS.LTS%s"
+                % (DIM, RESET))
+        else:
+            say("    %s- Homebrew:  brew install node%s" % (DIM, RESET))
         say("    %s- Installer: https://nodejs.org/ (LTS)%s" % (DIM, RESET))
         sys.exit(1)
 
     try:
-        raw = subprocess.check_output([node, "--version"], text=True).strip()
+        raw = subprocess.check_output([node, "--version"], text=True,
+                                      encoding="utf-8",
+                                      errors="replace").strip()
         major = int(raw.lstrip("v").split(".")[0])
     except Exception:
         warn("could not read the Node version; continuing anyway")
@@ -106,8 +122,9 @@ def check_node():
     if major < MIN_NODE_MAJOR:
         fail("Node %s is too old -- the server needs %d or newer."
              % (raw, MIN_NODE_MAJOR))
-        say("    %sbrew upgrade node%s   (or reinstall from nodejs.org)"
-            % (DIM, RESET))
+        say("    %s%s%s   (or reinstall from nodejs.org)"
+            % (DIM, "winget upgrade OpenJS.NodeJS.LTS" if IS_WINDOWS
+               else "brew upgrade node", RESET))
         sys.exit(1)
 
     ok("Node %s" % raw)
@@ -154,23 +171,31 @@ def load_config(path):
         fail("bridge config not found at %s" % path)
         say("  The Mini App reuses the chat bridge's bot token and chat id,")
         say("  so the bridge has to be set up first:")
-        say("    %spython3 %s%s"
-            % (DIM, os.path.join(BRIDGE_DIR, "setup.py"), RESET))
+        say("    %s%s %s%s"
+            % (DIM, PY, os.path.join(BRIDGE_DIR, "setup.py"), RESET))
         say("  Looked in:")
         for candidate in CONFIG_CANDIDATES:
             say("    %s%s%s" % (DIM, candidate, RESET))
         sys.exit(1)
-    with open(path) as fh:
+    with open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
 def write_config(path, config):
     """Rewrite the config in place, preserving permissions."""
     tmp = path + ".tmp"
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(config, fh, indent=2)
         fh.write("\n")
-    os.replace(tmp, path)
+    for attempt in range(20):
+        try:
+            os.replace(tmp, path)
+            break
+        except PermissionError:
+            # Windows will not rename over a file another process has open.
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -259,7 +284,30 @@ def configure(config_path):
     return section
 
 
-# --- step 4: launchd -----------------------------------------------------
+# --- step 4: the background service -------------------------------------
+
+
+def install_service_windows(node, entry, config_path, section, out_log,
+                            err_log):
+    ws = _winsupport()
+    ws.stop(LABEL)
+    registered, message = ws.install(
+        LABEL, [node, entry], MINIAPP_DIR, out_log, err_log,
+        env={
+            "MINIAPP_CONFIG": config_path,
+            "MINIAPP_PORT": str(section.get("port", DEFAULT_PORT)),
+        },
+        description="Aside Telegram Mini App server (aside-telegram-bridge)")
+    if not registered:
+        fail("could not register the scheduled task: %s" % message)
+        sys.exit(1)
+    ok("registered the %s scheduled task" % LABEL)
+    if not ws.start(LABEL):
+        fail("the service did not start")
+        say("  logs: %s" % err_log)
+        sys.exit(1)
+    ok("service started (%s)" % LABEL)
+    return out_log, err_log
 
 
 def install_service(config_path, section):
@@ -272,6 +320,9 @@ def install_service(config_path, section):
     state_dir = section.get("state_dir") or os.path.dirname(config_path)
     out_log = os.path.join(state_dir, "miniapp.out.log")
     err_log = os.path.join(state_dir, "miniapp.err.log")
+    if IS_WINDOWS:
+        return install_service_windows(node, entry, config_path, section,
+                                       out_log, err_log)
 
     plist = {
         "Label": LABEL,
@@ -381,6 +432,8 @@ def find_tunnel_url(log_paths, attempts=30):
 
 
 def main():
+    if IS_WINDOWS:
+        _winsupport().setup_console()
     say("%s\n  Aside Telegram Mini App -- setup\n%s" % (BOLD, RESET))
     total = 5
 
@@ -476,8 +529,11 @@ def main():
         % (DIM, RESET))
     say()
     say("  %slogs:    %s%s" % (DIM, err_log, RESET))
-    say("  %srestart: launchctl kickstart -k gui/%d/%s%s"
-        % (DIM, os.getuid(), LABEL, RESET))
+    if IS_WINDOWS:
+        say("  %srestart: bridgemon miniapp restart%s" % (DIM, RESET))
+    else:
+        say("  %srestart: launchctl kickstart -k gui/%d/%s%s"
+            % (DIM, os.getuid(), LABEL, RESET))
     say()
 
 

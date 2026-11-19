@@ -106,7 +106,7 @@ describe('threadErrorText', () => {
     const out = threadErrorText(new Error('404: session_not_found'));
     expect(out).not.toMatch(/\d{3}:/);
     expect(out).not.toContain('_');
-    expect(out).toBe('This chat is no longer on your Mac.');
+    expect(out).toBe('This chat is no longer on your computer.');
   });
 
   it('explains the cases a user can act on', () => {

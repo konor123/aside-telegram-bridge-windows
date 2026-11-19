@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -25,6 +26,19 @@ LOG_PATH = os.path.join(BRIDGE_DIR, "bridge.log")
 MEDIA_DIR = os.path.join(BRIDGE_DIR, "media")
 
 TG_LIMIT = 4000  # telegram hard cap is 4096
+
+IS_WINDOWS = os.name == "nt"
+# The service runs without a console, so every console program it starts
+# (the aside CLI, PowerShell) would otherwise open a window of its own.
+NO_WINDOW = {"creationflags": 0x08000000} if IS_WINDOWS else {}
+# CreateProcess caps a whole command line at 32767 characters.
+WINDOWS_CMDLINE_MAX = 32000
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
 
 # --- the soft question protocol ---------------------------------------
 # A session that calls the native ask_user_question or
@@ -221,9 +235,10 @@ STATE_LOCK = threading.Lock()
 
 def log(msg):
     line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
-    sys.stderr.write(line)
+    if sys.stderr is not None:
+        sys.stderr.write(line)
     try:
-        with open(LOG_PATH, "a") as f:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
             f.write(line)
     except OSError:
         pass
@@ -231,7 +246,7 @@ def log(msg):
 
 def load_json(path, default):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return default
@@ -240,9 +255,18 @@ def load_json(path, default):
 def save_json(path, data):
     with STATE_LOCK:
         tmp = path + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=1)
-        os.replace(tmp, path)
+        # Windows refuses to rename over a file another process has open
+        # (`bridgemon watch` reads state.json every half second).
+        for attempt in range(20):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
 
 
 def download_photo(message):
@@ -303,6 +327,39 @@ def detect_aside_root():
     return os.path.expanduser("~/.aside/u/0")
 
 
+def windows_aside_cli_candidates():
+    """Where the Aside CLI installer puts aside.exe, in the order the Aside
+    daemon itself looks: an ASIDE_CLI_INSTALL_DIR override, the default
+    %LOCALAPPDATA%\\Aside\\CLI, then the two per-user bin folders."""
+    home = os.path.expanduser("~")
+    local = (os.environ.get("LOCALAPPDATA") or "").strip() \
+        or os.path.join(home, "AppData", "Local")
+    out = []
+    custom = (os.environ.get("ASIDE_CLI_INSTALL_DIR") or "").strip()
+    if custom:
+        out.append(os.path.join(custom, "current", "aside.exe"))
+    out += [
+        os.path.join(local, "Aside", "CLI", "current", "aside.exe"),
+        os.path.join(home, ".local", "bin", "aside.exe"),
+        os.path.join(home, ".aside", "bin", "aside.exe"),
+    ]
+    return out
+
+
+def default_aside_cli():
+    if not IS_WINDOWS:
+        return "~/.aside/cli/Aside CLI.app/Contents/MacOS/aside"
+    for candidate in windows_aside_cli_candidates():
+        if os.path.isfile(candidate):
+            return candidate
+    # Not installed yet: name where the installer will put it, so the
+    # error a turn reports points at the right place.
+    local = (os.environ.get("LOCALAPPDATA") or "").strip() \
+        or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+    return shutil.which("aside") or os.path.join(
+        local, "Aside", "CLI", "current", "aside.exe")
+
+
 def config_path(key, fallback):
     """A path from config.json, where EMPTY means "work it out yourself".
 
@@ -323,8 +380,7 @@ API = "https://api.telegram.org/bot%s/" % TOKEN
 OWNER = CONFIG.get("owner_name", "the user")
 SESSIONS_DIR = config_path(
     "sessions_dir", os.path.join(detect_aside_root(), "sessions"))
-ASIDE_CLI = config_path(
-    "aside_cli", "~/.aside/cli/Aside CLI.app/Contents/MacOS/aside")
+ASIDE_CLI = config_path("aside_cli", default_aside_cli())
 EXEC_TIMEOUT = int(CONFIG.get("exec_timeout_seconds", 1200))
 PERSONA_PROMPT = CONFIG.get("persona_prompt") or \
     DEFAULT_PERSONA.format(owner=OWNER)
@@ -444,6 +500,11 @@ def _resolve_local_path(raw_path):
     p = raw_path.strip().strip("<>").strip('"').strip("'")
     if p.startswith("file://"):
         p = p[len("file://"):]
+        if IS_WINDOWS:
+            # file:///C:/Users/... names C:/Users/..., not /C:/Users/...
+            p = urllib.parse.unquote(p)
+            if re.match(r"^/[A-Za-z]:[\\/]", p):
+                p = p[1:]
     p = os.path.expanduser(p)
     if os.path.isfile(p):
         return p
@@ -588,6 +649,26 @@ def read_error_since(msg_file, byte_offset, strict=False):
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def spill_prompt(prompt):
+    """Hand an over-long prompt over as a file.
+
+    Windows caps a command line at 32767 characters, and `aside exec`
+    takes the prompt as an argument, so a long enough batch of messages
+    would fail to start at all. The full text goes to a UTF-8 file and the
+    agent is told to read it; the question reminder rides along on the
+    short prompt too, since that is the one rule that must not be missed.
+    """
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    path = os.path.join(MEDIA_DIR, "message-%d.txt" % int(time.time() * 1000))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(prompt)
+    log("prompt of %d chars too long for the command line, saved to %s"
+        % (len(prompt), path))
+    return ("[%s's message is too long to pass on the command line, so it "
+            "was saved to %s -- open that file and treat its full contents "
+            "as the message]%s" % (OWNER, path, QUESTION_REMINDER))
+
+
 def run_aside(prompt, session_id=None, model=None, effort=None):
     log("EXEC start session=%s model=%s effort=%s"
         % (session_id or "-", model or "-", effort or "-"))
@@ -600,9 +681,12 @@ def run_aside(prompt, session_id=None, model=None, effort=None):
     if effort:
         cmd += ["--effort", effort]
     cmd.append(prompt)
+    if IS_WINDOWS and len(subprocess.list2cmdline(cmd)) > WINDOWS_CMDLINE_MAX:
+        cmd[-1] = spill_prompt(prompt)
     try:
         p = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=EXEC_TIMEOUT
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=EXEC_TIMEOUT, **NO_WINDOW
         )
         log("EXEC done exit=%d in %.1fs" % (p.returncode, time.time() - t0))
         return p.returncode, ANSI_RE.sub("", p.stdout or ""), \
@@ -974,7 +1058,7 @@ def _grant_full_access(sid):
             [ASIDE_CLI, "repl",
              "aside.sessions.update('%s', "
              "{ permissionMode: 'full-access' })" % sid],
-            capture_output=True, timeout=30)
+            capture_output=True, timeout=30, **NO_WINDOW)
         log("granted full-access to %s" % sid)
     except Exception as e:  # noqa: BLE001
         log("full-access grant failed: %s" % e)
@@ -1188,7 +1272,7 @@ def _prepare_new_session(sid):
     try:
         subprocess.run(
             [ASIDE_CLI, "repl", new_session_settings_expression(sid)],
-            capture_output=True, timeout=30)
+            capture_output=True, timeout=30, **NO_WINDOW)
         log("granted full-access and cleared finalConfirm on %s" % sid)
     except Exception as e:  # noqa: BLE001
         log("new-session settings failed: %s" % e)
@@ -2025,7 +2109,7 @@ def handle_message(text):
                 send_text("the model provider refused that turn: %s"
                           % failed[:300])
             else:
-                send_text("done, but no text came back. odd. check the mac?")
+                send_text("done, but no text came back. odd. check the computer?")
 
 
 def worker_loop():
@@ -2071,6 +2155,53 @@ def worker_loop():
                 QUEUED_NOTE_SENT.clear()
 
 
+def windows_processes(image_name):
+    """[(pid, command line)] for every process with this image name.
+
+    Windows has no pgrep, and CIM is the supported way to read another
+    process's command line. Output is forced to UTF-8 because a command
+    line carries the prompt, in whatever language it was written.
+    """
+    if not re.match(r"^[A-Za-z0-9 ._()-]+$", image_name or ""):
+        return []
+    script = (
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "$p = @(Get-CimInstance Win32_Process -Filter \"Name='%s'\" "
+        "| Select-Object ProcessId, CommandLine); "
+        "ConvertTo-Json -InputObject $p -Compress" % image_name)
+    out = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+         script], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=60, **NO_WINDOW)
+    try:
+        rows = json.loads(out.stdout.strip() or "[]")
+    except ValueError:
+        return []
+    if isinstance(rows, dict):
+        rows = [rows]
+    found = []
+    for row in rows if isinstance(rows, list) else []:
+        try:
+            found.append((int(row.get("ProcessId")),
+                          str(row.get("CommandLine") or "")))
+        except (TypeError, ValueError, AttributeError):
+            continue
+    return found
+
+
+def exec_cmdline_matches(cmdline, session_id):
+    """True if a command line is `aside exec --session <session_id> ...`."""
+    return bool(re.search(
+        r'(^|\s)exec\s+--session\s+"?%s"?(\s|$)' % re.escape(session_id),
+        cmdline or ""))
+
+
+def stale_exec_pids_windows(session_id):
+    image = os.path.basename(ASIDE_CLI) or "aside.exe"
+    return [str(pid) for pid, cmdline in windows_processes(image)
+            if exec_cmdline_matches(cmdline, session_id)]
+
+
 def _reap_stale_exec(session_id):
     """Kill any leftover 'aside exec --session <sid>' process still
     running from before this restart.
@@ -2089,10 +2220,13 @@ def _reap_stale_exec(session_id):
     if not session_id:
         return
     try:
-        out = subprocess.run(
-            ["pgrep", "-f", "aside exec --session %s " % session_id],
-            capture_output=True, text=True)
-        pids = [p for p in out.stdout.split() if p.isdigit()]
+        if IS_WINDOWS:
+            pids = stale_exec_pids_windows(session_id)
+        else:
+            out = subprocess.run(
+                ["pgrep", "-f", "aside exec --session %s " % session_id],
+                capture_output=True, text=True)
+            pids = [p for p in out.stdout.split() if p.isdigit()]
         for pid in pids:
             if int(pid) == os.getpid():
                 continue
@@ -2100,7 +2234,7 @@ def _reap_stale_exec(session_id):
                 "from a restart mid-turn)" % (pid, session_id))
             try:
                 os.kill(int(pid), signal.SIGTERM)
-            except ProcessLookupError:
+            except OSError:
                 pass
         if pids:
             time.sleep(1)

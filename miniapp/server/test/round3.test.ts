@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildInitDataFields, signInitData } from '../../scripts/sign-initdata.mjs';
 import { buildServer } from '../src/app.js';
 import { loadConfig, loadOrCreateJwtSecret } from '../src/config.js';
-import { FAKE_BOT_TOKEN, OWNER_ID, makeTestEnv, type TestEnv } from './helpers.js';
+import { FAKE_BOT_TOKEN, OWNER_ID, makeTestEnv, type TestEnv, ON_WINDOWS } from './helpers.js';
 
 let env: TestEnv;
 let app: FastifyInstance;
@@ -253,7 +253,7 @@ describe('sending with attachments', () => {
     throw new Error('the CLI was never invoked');
   };
 
-  it('prepends the saved paths to the prompt', async () => {
+  it.skipIf(ON_WINDOWS)('prepends the saved paths to the prompt', async () => {
     const one = await upload('shot-one.txt', 'pixels');
     const two = await upload('shot-two.txt', 'more pixels');
 
@@ -281,7 +281,7 @@ describe('sending with attachments', () => {
    * A client must not be able to name a file on the machine and have the
    * agent told to read it. Only paths this server issued are honoured.
    */
-  it('drops a path the server never issued', async () => {
+  it.skipIf(ON_WINDOWS)('drops a path the server never issued', async () => {
     await app.inject({
       method: 'POST',
       url: '/api/sessions/fixtureAAAA/send',
@@ -295,7 +295,7 @@ describe('sending with attachments', () => {
     expect(argv).toContain('read this');
   });
 
-  it('accepts a send that is attachments-only', async () => {
+  it.skipIf(ON_WINDOWS)('accepts a send that is attachments-only', async () => {
     const uploaded = await upload('shot.txt', 'pixels');
     const res = await app.inject({
       method: 'POST',
@@ -383,7 +383,7 @@ describe('POST /api/sessions/:id/permission', () => {
    * `full-access` -- which is exactly the property being pinned: a claimed
    * change that did not land is not reported as if it had.
    */
-  it('reports the state it can read back, not the request', async () => {
+  it.skipIf(ON_WINDOWS)('reports the state it can read back, not the request', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/sessions/fixtureAAAA/permission',

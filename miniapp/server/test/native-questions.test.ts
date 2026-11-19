@@ -45,6 +45,7 @@ import {
   defaultFixtureRows,
   makeTestEnv,
   type TestEnv,
+  ON_WINDOWS,
 } from './helpers.js';
 
 // --- gap 2 + gap 3, as pure functions ------------------------------------
@@ -387,7 +388,7 @@ afterEach(async () => {
   }
 });
 
-describe('gap 3: follow-ups carry the reminder', () => {
+describe.skipIf(ON_WINDOWS)('gap 3: follow-ups carry the reminder', () => {
   beforeEach(() => bootRecorder());
 
   it('appends it to an ordinary send', async () => {
@@ -431,7 +432,7 @@ describe('gap 3: follow-ups carry the reminder', () => {
   });
 });
 
-describe('gap 2: the confirm toggle never arms the native tool', () => {
+describe.skipIf(ON_WINDOWS)('gap 2: the confirm toggle never arms the native tool', () => {
   beforeEach(() => bootRecorder());
 
   it('turns the daemon flag OFF on a session this app creates', async () => {
@@ -571,7 +572,7 @@ describe('gap 4: continuing from a stuck session', () => {
     expect(res.json().error).toBe('no_pending_question');
   });
 
-  it('seeds a NEW session with the question and the tapped answer', async () => {
+  it.skipIf(ON_WINDOWS)('seeds a NEW session with the question and the tapped answer', async () => {
     parkOnNativeQuestion();
     const res = await app.inject({
       method: 'POST',

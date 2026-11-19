@@ -9,6 +9,15 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
 export const FAKE_BOT_TOKEN = '1234567890:TEST-ONLY-FAKE-BOT-TOKEN-not-real';
+
+/**
+ * Tests that stand in a `#!/bin/sh` script for the aside CLI, or that
+ * assert POSIX mode bits, cannot run on Windows: it will not execute a
+ * shebang script and has no mode bits. What they cover -- argv plumbing,
+ * permission hygiene -- is the same code on every platform and is
+ * exercised wherever a POSIX shell exists.
+ */
+export const ON_WINDOWS = process.platform === 'win32';
 export const OWNER_ID = 8675309;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
